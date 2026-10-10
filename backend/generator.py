@@ -2,10 +2,13 @@
 
 import json
 import logging
+import queue
+import threading
 from collections.abc import Generator
 from datetime import datetime
 
-from backend.llm_client import get_llm_client
+from backend.curation import BatchedSelector, SelectionResult
+from backend.llm_client import MAX_TRACK_POOL, LLMResponse, get_llm_client
 from backend.models import GenerateResponse, Track
 from backend.plex_client import PlexQueryError, get_plex_client
 from backend import library_cache
@@ -100,6 +103,18 @@ def _cached_track_to_model(cached: dict) -> Track:
     )
 
 
+# The candidate pool is at least this many times the playlist size, so the AI
+# always has a real choice to make (e.g. 500 tracks -> scan at least 2000).
+MIN_POOL_MULTIPLIER = 4
+
+
+def effective_pool_size(max_tracks_to_ai: int, track_count: int) -> int:
+    """Number of candidate tracks to load for a request (0 = no limit)."""
+    if max_tracks_to_ai <= 0:
+        return MAX_TRACK_POOL
+    return min(MAX_TRACK_POOL, max(max_tracks_to_ai, track_count * MIN_POOL_MULTIPLIER))
+
+
 def _get_tracks_from_cache_or_plex(
     plex_client,
     genres: list[str] | None,
@@ -114,7 +129,7 @@ def _get_tracks_from_cache_or_plex(
         List of Track objects
     """
     has_filters = genres or decades or min_rating > 0
-    effective_limit = max_tracks_to_ai if max_tracks_to_ai > 0 else 2000
+    effective_limit = max_tracks_to_ai if max_tracks_to_ai > 0 else MAX_TRACK_POOL
 
     # Try cache first
     if library_cache.has_cached_tracks():
@@ -197,7 +212,7 @@ def generate_playlist_stream(
                 decades=decades,
                 exclude_live=exclude_live,
                 min_rating=min_rating,
-                max_tracks_to_ai=max_tracks_to_ai,
+                max_tracks_to_ai=effective_pool_size(max_tracks_to_ai, track_count),
             )
         except PlexQueryError as e:
             yield emit("error", {"message": f"Plex server error: {e}"})
@@ -209,90 +224,65 @@ def generate_playlist_stream(
             yield emit("error", {"message": "No tracks match the selected filters. Try broadening your selection."})
             return
 
+        if seed_track:
+            filtered_tracks = [t for t in filtered_tracks if t.rating_key != seed_track.rating_key]
+
         # Step 2: Report track count (sampling already done server-side)
         if has_filters:
             yield emit("progress", {"step": "filtering", "message": f"Using {len(filtered_tracks)} tracks..."})
         else:
             yield emit("progress", {"step": "filtering", "message": f"Using {len(filtered_tracks)} random tracks..."})
 
-        # Step 3: Build track list
-        yield emit("progress", {"step": "preparing", "message": f"Preparing {len(filtered_tracks)} tracks for AI..."})
-
-        track_list = "\n".join(
-            f"{i+1}. {t.artist} - {t.title} ({t.album}, {t.year or 'Unknown year'})"
-            for i, t in enumerate(filtered_tracks)
+        # Step 3: Build the request description shared by every batch call
+        request_text = _build_request_text(
+            prompt, seed_track, selected_dimensions, additional_notes, refinement_answers
         )
 
-        # Build the generation prompt
-        generation_parts = []
-
-        if prompt:
-            generation_parts.append(f"User's request: {prompt}")
-
-        if seed_track:
-            generation_parts.append(
-                f"Seed track: {seed_track.title} by {seed_track.artist} "
-                f"(from {seed_track.album}, {seed_track.year or 'Unknown year'})"
-            )
-            if selected_dimensions:
-                generation_parts.append(f"Explore these dimensions: {', '.join(selected_dimensions)}")
-
-        if additional_notes:
-            generation_parts.append(f"Additional notes: {additional_notes}")
-
-        if refinement_answers:
-            answered = [a for a in refinement_answers if a]
-            if answered:
-                generation_parts.append(f"User preferences: {', '.join(answered)}")
-
-        generation_parts.append(f"\nSelect {track_count} tracks from this library:\n{track_list}")
-
-        generation_prompt = "\n\n".join(generation_parts)
-
-        # Step 4: Call LLM
+        # Step 4: Batched selection (runs in a worker thread; progress is
+        # relayed through a queue so it can be streamed while the LLM works)
         yield emit("progress", {"step": "ai_working", "message": "AI is curating your playlist..."})
+        selector = BatchedSelector(llm_client, request_text)
+        selection: SelectionResult | None = None
+        for kind, payload in _run_selection(selector, filtered_tracks, track_count):
+            if kind == "event":
+                yield emit("progress", payload)
+            elif kind == "heartbeat":
+                yield ": heartbeat\n\n"
+            elif kind == "error":
+                raise payload
+            else:
+                selection = payload
 
-        logger.info("Calling LLM with prompt length: %d chars", len(generation_prompt))
-        response = llm_client.generate(generation_prompt, GENERATION_SYSTEM)
-        logger.info("LLM response received: %d input, %d output tokens", response.input_tokens, response.output_tokens)
-
-        # Step 5: Parse response
-        yield emit("progress", {"step": "parsing", "message": "Parsing AI selections..."})
-
-        track_selections = llm_client.parse_json_response(response)
-
-        if not isinstance(track_selections, list):
-            yield emit("error", {"message": "LLM returned invalid track selection format"})
+        assert selection is not None
+        logger.info(
+            "Selection complete: %d tracks, %d rounds, %d LLM calls, %d tokens, %d fallback batches",
+            len(selection.tracks), selection.rounds, selection.llm_calls,
+            selection.total_tokens, selection.fallback_batches,
+        )
+        if selection.llm_calls and selection.fallback_batches == selection.llm_calls:
+            yield emit("error", {
+                "message": "The AI did not return any usable selections. Check that the "
+                           "model is loaded and responding, or try a different model."
+            })
             return
 
-        # Step 6: Match tracks
-        yield emit("progress", {"step": "matching", "message": f"Matching {len(track_selections)} selections to library..."})
-
-        matched_tracks: list[Track] = []
-        used_keys: set[str] = set()
-        track_reasons: dict[str, str] = {}
-
-        if seed_track:
-            used_keys.add(seed_track.rating_key)
-
-        for selection in track_selections:
-            if len(matched_tracks) >= track_count:
-                break
-
-            artist = selection.get("artist", "")
-            title = selection.get("title", "")
-            reason = selection.get("reason", "")
-
-            for track in filtered_tracks:
-                if track.rating_key in used_keys:
-                    continue
-
-                if _tracks_match(artist, title, track):
-                    matched_tracks.append(track)
-                    used_keys.add(track.rating_key)
-                    if reason:
-                        track_reasons[track.rating_key] = reason
-                    break
+        matched_tracks: list[Track] = selection.tracks
+        track_reasons: dict[str, str] = selection.reasons
+        response = LLMResponse(
+            content="",
+            input_tokens=selection.input_tokens,
+            output_tokens=selection.output_tokens,
+            model=llm_client.config.model_generation,
+        )
+        track_selections = [
+            {
+                "artist": t.artist,
+                "title": t.title,
+                "album": t.album,
+                "reason": track_reasons.get(t.rating_key, ""),
+            }
+            for t in matched_tracks
+        ]
 
         # Step 7: Generate narrative
         yield emit("progress", {"step": "narrative", "message": "Writing playlist narrative..."})
@@ -393,29 +383,6 @@ def generate_playlist_stream(
         yield emit("error", {"message": str(e)})
 
 
-GENERATION_SYSTEM = """You are a music curator creating a playlist from a user's music library.
-
-You will be given:
-1. A description of what the user wants (prompt, seed track dimensions, or both)
-2. A numbered list of tracks that are available in their library
-
-Your task is to select tracks that best match the user's request. For each track, include a brief reason (1 sentence) explaining why it fits.
-
-Guidelines:
-- Select tracks that fit the mood, era, style, and other aspects of the request
-- Vary the selection - don't pick too many tracks from the same artist or album
-- Consider the flow of the playlist - how tracks will sound in sequence
-- If using a seed track, don't include the seed track itself in the results
-
-Return ONLY a JSON array like:
-[
-  {"artist": "Artist Name", "album": "Album Name", "title": "Track Title", "reason": "Brief explanation of why this track fits."},
-  ...
-]
-
-No markdown formatting, no explanations - just the JSON array."""
-
-
 NARRATIVE_SYSTEM = """You are a music connoisseur writing a brief liner note for a playlist.
 
 Given the user's original request and the track selections (with reasons), create:
@@ -430,6 +397,79 @@ Return ONLY valid JSON:
 {"title": "Creative Title Here", "narrative": "Your brief narrative with 'song names' in single quotes..."}
 
 No markdown formatting, no explanations - just the JSON object."""
+
+
+def _build_request_text(
+    prompt: str | None,
+    seed_track: Track | None,
+    selected_dimensions: list[str] | None,
+    additional_notes: str | None,
+    refinement_answers: list[str | None] | None,
+) -> str:
+    """Describe what the user wants; repeated at the top of every batch call."""
+    parts = []
+    if prompt:
+        parts.append(f"User's request: {prompt}")
+    if seed_track:
+        parts.append(
+            f"Seed track: {seed_track.title} by {seed_track.artist} "
+            f"(from {seed_track.album}, {seed_track.year or 'Unknown year'})"
+        )
+        if selected_dimensions:
+            parts.append(f"Explore these dimensions: {', '.join(selected_dimensions)}")
+    if additional_notes:
+        parts.append(f"Additional notes: {additional_notes}")
+    if refinement_answers:
+        answered = [a for a in refinement_answers if a]
+        if answered:
+            parts.append(f"User preferences: {', '.join(answered)}")
+    return "\n".join(parts)
+
+
+HEARTBEAT_SECONDS = 15
+
+
+def _run_selection(
+    selector: BatchedSelector, pool: list[Track], track_count: int
+) -> Generator[tuple[str, object], None, None]:
+    """Run selector.select in a thread, yielding ("event"|"heartbeat"|"error"|"done", payload)."""
+    events: queue.Queue = queue.Queue()
+    state = {"round": 0, "pool": 0, "keep": 0}
+
+    def on_round(round_no: int, pool_size: int, keep: int) -> None:
+        state.update(round=round_no, pool=pool_size, keep=keep)
+        if keep == track_count and pool_size <= track_count * 5:
+            msg = f"Picking the final {keep} from {pool_size} candidates..."
+        else:
+            msg = f"Round {round_no}: narrowing {pool_size:,} tracks to {keep:,}..."
+        events.put(("event", {"step": "ai_working", "message": msg}))
+
+    def on_progress(done: int, total: int) -> None:
+        if total > 1:
+            events.put(("event", {
+                "step": "ai_working",
+                "message": f"Round {state['round']}: batch {done}/{total} "
+                           f"({state['pool']:,} \u2192 {state['keep']:,} tracks)",
+                "batch_done": done,
+                "batch_total": total,
+            }))
+
+    def worker() -> None:
+        try:
+            events.put(("done", selector.select(pool, track_count, on_round, on_progress)))
+        except Exception as e:  # surfaced to the caller
+            events.put(("error", e))
+
+    threading.Thread(target=worker, daemon=True).start()
+    while True:
+        try:
+            kind, payload = events.get(timeout=HEARTBEAT_SECONDS)
+        except queue.Empty:
+            yield "heartbeat", None
+            continue
+        yield kind, payload
+        if kind in ("done", "error"):
+            return
 
 
 def _tracks_match(llm_artist: str, llm_title: str, library_track: Track) -> bool:

@@ -50,6 +50,20 @@ TOKENS_PER_TRACK = 40
 # Tokens per album for recommendation flow (artist, album, year, genres)
 TOKENS_PER_ALBUM = 25
 
+# Default ceiling for the num_ctx we ask Ollama to allocate. Models often report
+# a native context of 128k+, which would exhaust VRAM on typical home hardware.
+# Batched selection works well with 8-16k, so cap unless the user overrides.
+OLLAMA_DEFAULT_NUM_CTX_CAP = 16384
+
+# Upper bound on the candidate pool for batched selection. The pool is no longer
+# limited by context size because tracks are scanned in context-sized batches.
+MAX_TRACK_POOL = 20000
+
+
+def estimate_tokens(text: str) -> int:
+    """Conservative token estimate (~3 chars/token) for budgeting prompts."""
+    return len(text) // 3 + 1
+
 
 @dataclass
 class LLMResponse:
@@ -59,6 +73,7 @@ class LLMResponse:
     input_tokens: int
     output_tokens: int
     model: str
+    truncated: bool = False  # True if generation stopped on the output limit
 
     @property
     def total_tokens(self) -> int:
@@ -117,14 +132,55 @@ class LLMClient:
             )
         # Note: Ollama uses httpx directly, no persistent client needed
 
+    @property
+    def is_local(self) -> bool:
+        """Whether the provider runs locally (Ollama or custom endpoint)."""
+        return self.provider in ("ollama", "custom")
+
+    @property
+    def context_window(self) -> int:
+        """Effective context window (tokens) available per request."""
+        if self.provider == "ollama":
+            return self.ollama_num_ctx
+        if self.provider == "custom":
+            return self.config.custom_context_window
+        return MODEL_CONTEXT_LIMITS.get(self.config.model_generation, 128_000)
+
+    @property
+    def ollama_num_ctx(self) -> int:
+        """num_ctx sent to Ollama on every request."""
+        if self.config.ollama_num_ctx > 0:
+            return self.config.ollama_num_ctx
+        return min(self.config.ollama_context_window, OLLAMA_DEFAULT_NUM_CTX_CAP)
+
+    @property
+    def concurrency(self) -> int:
+        """Number of LLM calls to run in parallel during batched selection."""
+        if self.config.concurrency > 0:
+            return self.config.concurrency
+        return 1 if self.is_local else 4
+
+    def _output_budget(self, prompt: str, system: str, max_output_tokens: int | None) -> int:
+        """Pick a max output token count that fits in the remaining context."""
+        requested = max_output_tokens or 8192
+        if not self.is_local:
+            return requested
+        remaining = self.context_window - estimate_tokens(prompt) - estimate_tokens(system) - 64
+        if max_output_tokens and remaining < requested:
+            logger.warning(
+                "Prompt leaves only ~%d tokens of a %d context for output (wanted %d)",
+                remaining, self.context_window, requested,
+            )
+        return min(requested, max(256, remaining))
+
     def _complete_anthropic(
-        self, prompt: str, system: str, model: str
+        self, prompt: str, system: str, model: str, max_output_tokens: int | None = None
     ) -> LLMResponse:
         """Make a completion request to Anthropic."""
         logger.info("Calling Anthropic API with %d char prompt", len(prompt))
         response = self._client.messages.create(
             model=model,
-            max_tokens=8192,
+            max_tokens=max_output_tokens or 8192,
             system=system,
             messages=[{"role": "user", "content": prompt}],
         )
@@ -136,16 +192,19 @@ class LLMClient:
             input_tokens=response.usage.input_tokens,
             output_tokens=response.usage.output_tokens,
             model=model,
+            truncated=getattr(response, "stop_reason", None) == "max_tokens",
         )
 
     def _complete_openai(
-        self, prompt: str, system: str, model: str
+        self, prompt: str, system: str, model: str, max_output_tokens: int | None = None
     ) -> LLMResponse:
         """Make a completion request to OpenAI or custom OpenAI-compatible endpoint."""
         logger.info("Calling OpenAI-compatible API with %d char prompt", len(prompt))
         response = self._client.chat.completions.create(
             model=model,
-            max_tokens=8192,
+            # Bounded by the remaining context for local endpoints, which reject
+            # (or silently truncate) requests where prompt + max_tokens > context.
+            max_tokens=self._output_budget(prompt, system, max_output_tokens),
             messages=[
                 {"role": "system", "content": system},
                 {"role": "user", "content": prompt},
@@ -153,7 +212,11 @@ class LLMClient:
         )
         logger.debug("OpenAI-compatible response received")
 
-        content = response.choices[0].message.content
+        choice = response.choices[0]
+        content = choice.message.content or ""
+        truncated = getattr(choice, "finish_reason", None) == "length"
+        if truncated:
+            logger.warning("OpenAI-compatible response hit the output token limit")
         # Use getattr for safe token access (custom providers may omit usage)
         input_tokens = getattr(response.usage, "prompt_tokens", 0) if response.usage else 0
         output_tokens = getattr(response.usage, "completion_tokens", 0) if response.usage else 0
@@ -162,6 +225,7 @@ class LLMClient:
             input_tokens=input_tokens,
             output_tokens=output_tokens,
             model=model,
+            truncated=truncated,
         )
 
     def _complete_gemini(
@@ -226,7 +290,13 @@ class LLMClient:
         raise RuntimeError(f"Gemini API failed after {max_retries} attempts: {last_error}")
 
     def _complete_ollama(
-        self, prompt: str, system: str, model: str, timeout: float = 600.0
+        self,
+        prompt: str,
+        system: str,
+        model: str,
+        timeout: float = 600.0,
+        max_output_tokens: int | None = None,
+        json_mode: bool = False,
     ) -> LLMResponse:
         """Make a completion request to Ollama.
 
@@ -239,19 +309,29 @@ class LLMClient:
         Returns:
             LLMResponse with content and token counts
         """
-        logger.info("Calling Ollama API with %d char prompt", len(prompt))
+        num_ctx = self.ollama_num_ctx
+        num_predict = self._output_budget(prompt, system, max_output_tokens)
+        logger.info(
+            "Calling Ollama API with %d char prompt (~%d tokens, num_ctx=%d, num_predict=%d)",
+            len(prompt), estimate_tokens(prompt) + estimate_tokens(system), num_ctx, num_predict,
+        )
         ollama_url = self.config.ollama_url.rstrip("/")
 
+        payload: dict[str, Any] = {
+            "model": model,
+            "prompt": prompt,
+            "system": system,
+            "stream": False,
+            # Without num_ctx Ollama uses its small default context and silently
+            # drops the start of long prompts (including the instructions).
+            "options": {"num_ctx": num_ctx, "num_predict": num_predict},
+            "keep_alive": "30m",
+        }
+        if json_mode:
+            payload["format"] = "json"
+
         with httpx.Client(timeout=timeout) as client:
-            response = client.post(
-                f"{ollama_url}/api/generate",
-                json={
-                    "model": model,
-                    "prompt": prompt,
-                    "system": system,
-                    "stream": False,
-                },
-            )
+            response = client.post(f"{ollama_url}/api/generate", json=payload)
             response.raise_for_status()
             data = response.json()
 
@@ -262,6 +342,14 @@ class LLMClient:
         # prompt_eval_count is input tokens, eval_count is output tokens
         input_tokens = data.get("prompt_eval_count", 0)
         output_tokens = data.get("eval_count", 0)
+        truncated = data.get("done_reason") == "length"
+        if truncated:
+            logger.warning("Ollama response hit num_predict=%d and was cut off", num_predict)
+        if input_tokens and input_tokens >= num_ctx - 8:
+            logger.warning(
+                "Ollama prompt filled the %d token context; input was probably truncated",
+                num_ctx,
+            )
 
         # Check for empty response (common with small context windows)
         if not content or len(content.strip()) < 2:
@@ -277,22 +365,40 @@ class LLMClient:
             input_tokens=input_tokens,
             output_tokens=output_tokens,
             model=model,
+            truncated=truncated,
         )
 
-    def _complete(self, prompt: str, system: str, model: str) -> LLMResponse:
-        """Make a completion request to the configured provider."""
+    def _complete(
+        self,
+        prompt: str,
+        system: str,
+        model: str,
+        max_output_tokens: int | None = None,
+        json_mode: bool = False,
+    ) -> LLMResponse:
+        """Make a completion request to the configured provider.
+
+        Args:
+            max_output_tokens: Output cap (local providers are further bounded
+                by the context left after the prompt)
+            json_mode: Ask the provider to constrain output to valid JSON
+                (Ollama only; others rely on prompting + repair)
+        """
         if self.provider == "anthropic":
-            return self._complete_anthropic(prompt, system, model)
+            return self._complete_anthropic(prompt, system, model, max_output_tokens)
         elif self.provider in ("openai", "custom"):
-            return self._complete_openai(prompt, system, model)
+            return self._complete_openai(prompt, system, model, max_output_tokens)
         elif self.provider == "gemini":
             return self._complete_gemini(prompt, system, model)
         elif self.provider == "ollama":
-            return self._complete_ollama(prompt, system, model)
+            return self._complete_ollama(
+                prompt, system, model,
+                max_output_tokens=max_output_tokens, json_mode=json_mode,
+            )
         else:
             raise ValueError(f"Unknown provider: {self.provider}")
 
-    def analyze(self, prompt: str, system: str) -> LLMResponse:
+    def analyze(self, prompt: str, system: str, **kwargs: Any) -> LLMResponse:
         """Use the analysis model for understanding tasks.
 
         Args:
@@ -303,9 +409,9 @@ class LLMClient:
             LLMResponse with content and token counts
         """
         model = self.config.model_analysis
-        return self._complete(prompt, system, model)
+        return self._complete(prompt, system, model, **kwargs)
 
-    def generate(self, prompt: str, system: str) -> LLMResponse:
+    def generate(self, prompt: str, system: str, **kwargs: Any) -> LLMResponse:
         """Use the generation model for track selection.
 
         If smart_generation is enabled, uses the analysis model instead.
@@ -321,7 +427,7 @@ class LLMClient:
             model = self.config.model_analysis
         else:
             model = self.config.model_generation
-        return self._complete(prompt, system, model)
+        return self._complete(prompt, system, model, **kwargs)
 
     def _extract_json_bounds(self, content: str) -> str | None:
         """Extract JSON array or object from content with extra text.
@@ -420,8 +526,8 @@ class LLMClient:
                 content = match.group(1).strip()
 
         # Replace curly/smart quotes with straight quotes (common LLM issue)
-        content = content.replace('"', '"').replace('"', '"')
-        content = content.replace(''', "'").replace(''', "'")
+        content = content.replace("\u201c", '"').replace("\u201d", '"')
+        content = content.replace("\u2018", "'").replace("\u2019", "'")
 
         try:
             return json.loads(content)
@@ -481,16 +587,10 @@ def get_max_tracks_for_model(
         config: Optional LLMConfig for local provider context window lookup
 
     Returns:
-        Maximum number of tracks (0 = no practical limit)
+        Maximum number of tracks in the candidate pool. Selection is batched to
+        fit the context window, so this is no longer bounded by context size.
     """
-    context_limit = get_model_context_limit(model, config)
-    usable_tokens = int(context_limit * (1 - buffer_percent))
-
-    # Reserve ~1000 tokens for system prompt and output
-    available_for_tracks = usable_tokens - 1000
-
-    max_tracks = available_for_tracks // TOKENS_PER_TRACK
-    return max(100, max_tracks)  # Minimum 100 tracks
+    return MAX_TRACK_POOL
 
 
 def get_max_albums_for_model(
@@ -535,7 +635,11 @@ def get_model_context_limit(model: str, config: LLMConfig | None = None) -> int:
         if config.provider == "custom":
             return config.custom_context_window
         if config.provider == "ollama":
-            return config.ollama_context_window
+            # What we actually request per call (num_ctx), not the model's
+            # advertised maximum.
+            if config.ollama_num_ctx > 0:
+                return config.ollama_num_ctx
+            return min(config.ollama_context_window, OLLAMA_DEFAULT_NUM_CTX_CAP)
 
     return 128_000  # Default fallback
 

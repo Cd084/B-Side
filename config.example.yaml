@@ -12,7 +12,7 @@ plex:
   music_library: "Music"
 
 llm:
-  # LLM provider: "anthropic", "openai", or "gemini"
+  # LLM provider: "anthropic", "openai", "gemini", "ollama", or "custom"
   provider: "gemini"
   # API key (override with ANTHROPIC_API_KEY, OPENAI_API_KEY, or GEMINI_API_KEY env var)
   api_key: ""
@@ -25,6 +25,18 @@ llm:
   # Use the analysis model for generation too (higher quality, ~3-5x cost)
   smart_generation: false
 
+  # --- Local models (ollama / custom) ---
+  # ollama_url: "http://localhost:11434"
+  # Context size requested from Ollama per call (num_ctx). 0 = auto:
+  # min(detected context, 16384). Raise it if you have VRAM to spare; larger
+  # values mean fewer, bigger batches. (env: OLLAMA_NUM_CTX)
+  # ollama_num_ctx: 0
+  # custom_url: "http://localhost:1234/v1"
+  # custom_context_window: 8192   # must match what the server actually loads
+  # Parallel LLM calls while scanning batches. 0 = auto (1 local, 4 cloud).
+  # Only raise for Ollama if OLLAMA_NUM_PARALLEL is set. (env: LLM_CONCURRENCY)
+  # concurrency: 0
+
 defaults:
-  # Default number of tracks in generated playlists (15, 25, or 40)
+  # Default number of tracks in generated playlists (1-2000)
   track_count: 25

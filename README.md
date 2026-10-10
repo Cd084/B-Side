@@ -7,6 +7,29 @@
 
 **AI-powered playlists and album recommendations for Plex—using only music you actually own.**
 
+> **This fork: large libraries, large playlists, local LLMs.** Upstream MediaSage
+> sends the whole candidate list to the model in one prompt and asks for the
+> whole playlist back in one JSON answer. With local models that overflows the
+> context window, so you end up building playlists 10–20 tracks at a time. This
+> fork:
+>
+> - **Scans the library in batches** sized to the model's context and runs an
+>   elimination tournament (best picks from each batch → next round → final
+>   ordered pick). Any library size works with an 8k-context model.
+> - **Returns pick numbers instead of titles**, so output stays tiny and every
+>   pick maps exactly to a library track (no fuzzy-matching misses).
+> - **Playlists of any size (1–2000)**; picks are validated and topped up so you
+>   always get the size you asked for.
+> - **Fixes Ollama**: sends `num_ctx` (Ollama otherwise silently truncates long
+>   prompts to its 2–4k default), caps it at 16k by default so large-context
+>   models don't exhaust VRAM, uses JSON mode, and detects cut-off output.
+> - **Saves big playlists to Plex in chunks** (bulk fetch, 200 tracks per
+>   request) instead of one request per track and one giant URL.
+> - Streams per-batch progress with heartbeats so long local runs don't time out.
+>
+> Tuning: `OLLAMA_NUM_CTX` (context per call) and `LLM_CONCURRENCY` (parallel
+> batch calls). See `config.example.yaml`.
+
 MediaSage is a self-hosted web app that creates playlists and recommends albums by combining LLM intelligence with your Plex library. Every suggestion is guaranteed playable because it only considers music you have.
 
 *Sample Generated Playlist:*

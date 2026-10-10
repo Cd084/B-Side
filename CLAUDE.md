@@ -126,6 +126,19 @@ Option: `smart_generation: true` uses analysis model for both (higher quality, ~
 - Zero cost (local inference)
 
 <!-- MANUAL ADDITIONS START -->
+## Batched selection (local-LLM fork)
+
+- `backend/curation.py` `BatchedSelector`: playlist generation never puts the
+  whole pool in one prompt. Pool is packed into context-sized batches; each call
+  returns pick *numbers* (`{"picks": [..]}`); winners advance until the pool fits
+  one final pick-and-order call. If the playlist itself is too large for one
+  call, the last round keeps exactly `track_count` and `spread_artists` orders it.
+- Pool size = `generator.effective_pool_size` (>= 4x playlist size, <= `MAX_TRACK_POOL`).
+- `LLMClient.context_window` is the per-call budget: for Ollama this is the
+  `num_ctx` actually sent (`ollama_num_ctx`, default min(detected, 16384)),
+  not the model's advertised maximum.
+- Plex playlist writes go through `PlexClient._fetch_tracks` /
+  `_add_items_chunked` (`PLAYLIST_CHUNK_SIZE` = 200).
 <!-- MANUAL ADDITIONS END -->
 
 ## Recent Changes

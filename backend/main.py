@@ -85,7 +85,7 @@ from backend.llm_client import (
     list_ollama_models,
 )
 from backend.analyzer import analyze_prompt as do_analyze_prompt, analyze_track as do_analyze_track
-from backend.generator import generate_playlist_stream
+from backend.generator import effective_pool_size, generate_playlist_stream
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -688,19 +688,23 @@ async def preview_filters(request: FilterPreviewRequest) -> FilterPreviewRespons
     # Calculate how many tracks will actually be sent to AI
     if matching_tracks <= 0:
         tracks_to_send = 0
-    elif request.max_tracks_to_ai == 0:  # No limit
-        tracks_to_send = matching_tracks
     else:
-        tracks_to_send = min(matching_tracks, request.max_tracks_to_ai)
+        tracks_to_send = min(
+            matching_tracks,
+            effective_pool_size(request.max_tracks_to_ai, request.track_count),
+        )
 
-    # Estimate tokens for all 3 API calls based on real-world testing (Feb 2026):
+    # Estimate tokens for the API calls:
     # - Analysis call (model_analysis): ~700 input, ~100 output
-    # - Generation call (model_generation): ~(tracks * 40) input, ~(track_count * 60) output
+    # - Batched selection (model_generation): every track is listed once in the
+    #   first round (~25 tokens each); later rounds re-list the ~20% kept, so
+    #   ~1.3x overall. Output is only pick numbers (~4 tokens each, ~30 with
+    #   reasons in the final call).
     # - Narrative call (model_analysis): ~400 input, ~200 output
     analysis_input = 1100  # analysis (700) + narrative (400)
     analysis_output = 300  # analysis (100) + narrative (200)
-    generation_input = tracks_to_send * 40
-    generation_output = request.track_count * 60  # ~60 tokens per track in response
+    generation_input = int(tracks_to_send * 25 * 1.3)
+    generation_output = int(tracks_to_send * 0.3 * 4) + request.track_count * 30
 
     estimated_input_tokens = analysis_input + generation_input
     estimated_output_tokens = analysis_output + generation_output

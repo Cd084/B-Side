@@ -318,7 +318,9 @@ class TestOllamaProvider:
 
         client._complete("test prompt", "system prompt", "llama3:8b")
 
-        mock_ollama.assert_called_once_with("test prompt", "system prompt", "llama3:8b")
+        mock_ollama.assert_called_once_with(
+            "test prompt", "system prompt", "llama3:8b", max_output_tokens=None, json_mode=False
+        )
 
 
 class TestCustomProvider:
@@ -399,7 +401,7 @@ class TestCustomProvider:
 
         client._complete("test prompt", "system prompt", "my-model")
 
-        mock_openai_method.assert_called_once_with("test prompt", "system prompt", "my-model")
+        mock_openai_method.assert_called_once_with("test prompt", "system prompt", "my-model", None)
 
 
 class TestLocalProviderCosts:
@@ -475,7 +477,7 @@ class TestLocalProviderContextLimits:
         assert limit == 16384
 
     def test_ollama_default_context(self):
-        """Ollama provider should use default 32768 context."""
+        """Ollama provider should use the capped default num_ctx (16384)."""
         from backend.llm_client import get_model_context_limit
         from backend.models import LLMConfig
 
@@ -487,7 +489,7 @@ class TestLocalProviderContextLimits:
         )
 
         limit = get_model_context_limit("llama3:8b", config)
-        assert limit == 32768
+        assert limit == 16384
 
     def test_ollama_context_from_config(self):
         """Ollama provider should use ollama_context_window from config."""
@@ -503,11 +505,15 @@ class TestLocalProviderContextLimits:
         )
 
         limit = get_model_context_limit("qwen3:8b", config)
-        assert limit == 40960
+        # Capped to the num_ctx we actually request from Ollama
+        assert limit == 16384
+
+        config.ollama_num_ctx = 32768  # explicit override wins
+        assert get_model_context_limit("qwen3:8b", config) == 32768
 
     def test_max_tracks_for_custom_model(self):
         """Should calculate max tracks based on custom context window."""
-        from backend.llm_client import get_max_tracks_for_model
+        from backend.llm_client import MAX_TRACK_POOL, get_max_tracks_for_model
         from backend.models import LLMConfig
 
         config = LLMConfig(
@@ -520,8 +526,8 @@ class TestLocalProviderContextLimits:
         )
 
         max_tracks = get_max_tracks_for_model("my-model", config=config)
-        # (16384 * 0.9 - 1000) / 50 = ~274 tracks
-        assert max_tracks > 200  # Should be reasonable number based on 16k context
+        # Selection is batched, so the pool is not limited by the 16k context
+        assert max_tracks == MAX_TRACK_POOL
 
 
 class TestOllamaModelInfoParsing:

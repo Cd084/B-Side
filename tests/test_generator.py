@@ -37,7 +37,7 @@ class TestPlaylistGeneration:
         )
 
         with patch("backend.generator.get_llm_client") as mock_llm:
-            mock_client = MagicMock()
+            mock_client = MagicMock(context_window=16384, concurrency=1)
             mock_client.generate.return_value = mock_response
             mock_client.analyze.return_value = LLMResponse(
                 content='{"title": "Test", "narrative": "Test narrative."}',
@@ -114,7 +114,7 @@ class TestPlaylistGeneration:
         )
 
         with patch("backend.generator.get_llm_client") as mock_llm:
-            mock_client = MagicMock()
+            mock_client = MagicMock(context_window=16384, concurrency=1)
             mock_client.generate.return_value = mock_response
             mock_client.analyze.return_value = LLMResponse(
                 content='{"title": "Test", "narrative": "Test."}',

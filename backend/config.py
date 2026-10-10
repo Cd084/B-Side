@@ -253,6 +253,12 @@ def load_config(config_path: Path | None = None) -> AppConfig:
         ollama_context_window=ollama_context_window,
         custom_url=custom_url,
         custom_context_window=custom_context_window,
+        ollama_num_ctx=int(get_env_or_yaml(
+            "OLLAMA_NUM_CTX", llm_yaml.get("ollama_num_ctx"), 0
+        )),
+        concurrency=int(get_env_or_yaml(
+            "LLM_CONCURRENCY", llm_yaml.get("concurrency"), 0
+        )),
     )
 
     defaults_config = DefaultsConfig(

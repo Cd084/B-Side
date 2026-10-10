@@ -110,6 +110,10 @@ class PlexQueryError(Exception):
 # Fuzzy matching threshold (0-100)
 FUZZ_THRESHOLD = 60
 
+# Max rating keys per Plex request when fetching/adding playlist items
+# (plexapi puts all keys in one URL; very long URLs are rejected).
+PLAYLIST_CHUNK_SIZE = 200
+
 # Patterns for detecting live recordings
 DATE_PATTERN = r"\d{4}[-/]\d{2}[-/]\d{2}"
 LIVE_KEYWORDS = r"\b(?:live|concert|sbd|bootleg)\b"
@@ -637,6 +641,53 @@ class PlexClient:
         except Exception:
             return None
 
+    def _fetch_tracks(self, rating_keys: list[str]) -> tuple[list[Any], list[str]]:
+        """Fetch track objects in bulk, preserving order.
+
+        One request per PLAYLIST_CHUNK_SIZE keys instead of one per track; keys
+        the bulk request misses are retried individually.
+
+        Returns:
+            (items, skipped_keys)
+        """
+        items: list[Any] = []
+        skipped: list[str] = []
+        for start in range(0, len(rating_keys), PLAYLIST_CHUNK_SIZE):
+            chunk = [str(k) for k in rating_keys[start:start + PLAYLIST_CHUNK_SIZE]]
+            valid = [k for k in chunk if k.isdigit()]
+            skipped.extend(k for k in chunk if not k.isdigit())
+            by_key: dict[str, Any] = {}
+            if valid:
+                try:
+                    fetched = self._server.fetchItems(f"/library/metadata/{','.join(valid)}")
+                    by_key = {str(getattr(i, "ratingKey", "")): i for i in fetched or []}
+                except Exception as e:
+                    logger.warning("Bulk fetch of %d tracks failed, falling back: %s", len(valid), e)
+            for key in valid:
+                item = by_key.get(key)
+                if item is None:
+                    try:
+                        item = self._server.fetchItem(int(key))
+                    except Exception as e:
+                        logger.warning("Failed to fetch track %s for playlist: %s", key, e)
+                        skipped.append(key)
+                        continue
+                items.append(item)
+        return items, skipped
+
+    @staticmethod
+    def _add_items_chunked(playlist: Any, items: list[Any]) -> None:
+        """Add items in chunks; plexapi puts every rating key in one URL."""
+        for start in range(0, len(items), PLAYLIST_CHUNK_SIZE):
+            playlist.addItems(items[start:start + PLAYLIST_CHUNK_SIZE])
+
+    def _create_playlist_chunked(self, name: str, items: list[Any]) -> Any:
+        """Create a playlist from any number of items without oversized URLs."""
+        playlist = self._server.createPlaylist(name, items=items[:PLAYLIST_CHUNK_SIZE])
+        if len(items) > PLAYLIST_CHUNK_SIZE:
+            self._add_items_chunked(playlist, items[PLAYLIST_CHUNK_SIZE:])
+        return playlist
+
     def create_playlist(
         self, name: str, rating_keys: list[str], description: str = ""
     ) -> dict[str, Any]:
@@ -655,15 +706,7 @@ class PlexClient:
 
         try:
             # Fetch track items
-            items = []
-            skipped_keys = []
-            for key in rating_keys:
-                try:
-                    item = self._server.fetchItem(int(key))
-                    items.append(item)
-                except Exception as e:
-                    logger.warning("Failed to fetch track %s for playlist: %s", key, e)
-                    skipped_keys.append(key)
+            items, skipped_keys = self._fetch_tracks(rating_keys)
 
             if skipped_keys:
                 logger.info(
@@ -677,7 +720,7 @@ class PlexClient:
                 return {"success": False, "error": "No valid tracks found"}
 
             # Create playlist
-            playlist = self._server.createPlaylist(name, items=items)
+            playlist = self._create_playlist_chunked(name, items)
 
             # Set description/summary if provided
             if description:
@@ -865,19 +908,14 @@ class PlexClient:
 
                     if scratch_playlist is None:
                         # Create new scratch playlist with the provided tracks
-                        items = []
-                        tracks_skipped = 0
-                        for key in rating_keys:
-                            try:
-                                items.append(self._server.fetchItem(int(key)))
-                            except Exception:
-                                tracks_skipped += 1
+                        items, skipped_keys = self._fetch_tracks(rating_keys)
+                        tracks_skipped = len(skipped_keys)
 
                         if not items:
                             return {"success": False, "error": "No valid tracks found"}
 
-                        playlist = self._server.createPlaylist(
-                            "MediaSage - Now Playing", items=items
+                        playlist = self._create_playlist_chunked(
+                            "MediaSage - Now Playing", items
                         )
 
                         if description:
@@ -908,11 +946,8 @@ class PlexClient:
 
             if mode == "replace":
                 # Fetch new items FIRST to avoid data loss if add fails
-                for key in rating_keys:
-                    try:
-                        items.append(self._server.fetchItem(int(key)))
-                    except Exception:
-                        tracks_skipped += 1
+                items, skipped_keys = self._fetch_tracks(rating_keys)
+                tracks_skipped = len(skipped_keys)
 
                 if not items:
                     return {
@@ -927,7 +962,7 @@ class PlexClient:
                 # This avoids data loss: if addItems fails, old tracks remain.
                 # If removeItems fails, user has duplicates (recoverable) not emptiness.
                 existing_items = playlist.items()
-                playlist.addItems(items)
+                self._add_items_chunked(playlist, items)
                 warning = None
                 if existing_items:
                     try:
@@ -943,17 +978,17 @@ class PlexClient:
                     str(item.ratingKey) for item in playlist.items()
                 }
 
+                new_keys = []
                 for key in rating_keys:
                     if key in existing_keys:
                         duplicates_skipped += 1
-                        continue
-                    try:
-                        items.append(self._server.fetchItem(int(key)))
-                    except Exception:
-                        tracks_skipped += 1
+                    else:
+                        new_keys.append(key)
+                items, skipped_keys = self._fetch_tracks(new_keys)
+                tracks_skipped = len(skipped_keys)
 
                 if items:
-                    playlist.addItems(items)
+                    self._add_items_chunked(playlist, items)
 
             else:
                 return {"success": False, "error": f"Unknown update mode: {mode}"}
@@ -1041,15 +1076,8 @@ class PlexClient:
             pass  # Best effort — some clients don't support this
 
         # Fetch track objects
-        tracks = []
-        tracks_skipped = 0
-        for key in rating_keys:
-            try:
-                item = self._server.fetchItem(int(key))
-                tracks.append(item)
-            except Exception as e:
-                tracks_skipped += 1
-                logger.warning("Failed to fetch track %s for play queue: %s", key, e)
+        tracks, skipped_keys = self._fetch_tracks(rating_keys)
+        tracks_skipped = len(skipped_keys)
 
         if not tracks:
             return {"success": False, "error": "No valid tracks found"}

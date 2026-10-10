@@ -37,6 +37,10 @@ class Track(BaseModel):
         return f"{minutes}:{seconds:02d}"
 
 
+# Largest playlist that can be generated in one request
+MAX_PLAYLIST_TRACKS = 2000
+
+
 class Dimension(BaseModel):
     """A musical dimension identified from a seed track."""
 
@@ -56,8 +60,8 @@ class FilterSet(BaseModel):
     @field_validator("track_count")
     @classmethod
     def validate_track_count(cls, v: int) -> int:
-        if v not in [15, 25, 50, 100]:
-            raise ValueError("track_count must be 15, 25, 50, or 100")
+        if not 1 <= v <= MAX_PLAYLIST_TRACKS:
+            raise ValueError(f"track_count must be between 1 and {MAX_PLAYLIST_TRACKS}")
         return v
 
 
@@ -106,6 +110,12 @@ class LLMConfig(BaseModel):
     ollama_context_window: int = 32768  # Detected from model, can be overridden
     custom_url: str = ""
     custom_context_window: int = 32768
+    # Context actually requested from Ollama per call (num_ctx). 0 = auto:
+    # min(ollama_context_window, 16384). Ollama otherwise runs at its small
+    # default (2-4k) and silently truncates long prompts.
+    ollama_num_ctx: int = 0
+    # Parallel LLM calls during batched selection. 0 = auto (1 local, 4 cloud).
+    concurrency: int = 0
 
     @field_validator("ollama_context_window", "custom_context_window")
     @classmethod
@@ -228,7 +238,7 @@ class GenerateRequest(BaseModel):
     refinement_answers: list[str | None] | None = None
     genres: list[str]
     decades: list[str]
-    track_count: int = 25
+    track_count: int = Field(25, ge=1, le=MAX_PLAYLIST_TRACKS)
     exclude_live: bool = True
     min_rating: int = 0  # 0 = any, 2/4/6/8/10 = minimum rating
     max_tracks_to_ai: int = 500  # 0 = no limit

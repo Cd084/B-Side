@@ -1142,3 +1142,54 @@ class TestPlexClientUpdatePlaylist:
         assert result["success"] is True
         assert result["tracks_added"] == 1
         assert result["tracks_skipped"] == 2
+
+
+class TestLargePlaylists:
+    """Large playlists must be fetched in bulk and added in chunks."""
+
+    def _client(self, mock_server):
+        from backend.plex_client import PlexClient
+
+        mock_server.library.section.return_value = MagicMock()
+        with patch("backend.plex_client.PlexServer", return_value=mock_server):
+            return PlexClient("http://localhost:32400", "token", "Music")
+
+    def test_create_large_playlist_is_chunked(self):
+        mock_server = MagicMock()
+        mock_server.fetchItems.side_effect = lambda ekey: [
+            MagicMock(ratingKey=int(k)) for k in ekey.rsplit("/", 1)[1].split(",")
+        ]
+        playlist = MagicMock(ratingKey=1)
+        mock_server.createPlaylist.return_value = playlist
+        client = self._client(mock_server)
+
+        keys = [str(i) for i in range(1, 451)]
+        result = client.create_playlist("Big", keys)
+
+        assert result["success"] is True
+        assert result["tracks_added"] == 450
+        assert mock_server.fetchItems.call_count == 3  # 200 + 200 + 50
+        mock_server.fetchItem.assert_not_called()
+        assert len(mock_server.createPlaylist.call_args.kwargs["items"]) == 200
+        assert [len(c.args[0]) for c in playlist.addItems.call_args_list] == [200, 50]
+        # Order is preserved across chunks
+        added = mock_server.createPlaylist.call_args.kwargs["items"] + [
+            i for c in playlist.addItems.call_args_list for i in c.args[0]
+        ]
+        assert [str(i.ratingKey) for i in added] == keys
+
+    def test_bulk_misses_fall_back_to_single_fetch(self):
+        mock_server = MagicMock()
+        mock_server.fetchItems.return_value = [MagicMock(ratingKey=1)]
+
+        def fetch_one(key):
+            if key == 3:
+                raise Exception("gone")
+            return MagicMock(ratingKey=key)
+
+        mock_server.fetchItem.side_effect = fetch_one
+        client = self._client(mock_server)
+
+        items, skipped = client._fetch_tracks(["1", "2", "3", "bad"])
+        assert [i.ratingKey for i in items] == [1, 2]
+        assert sorted(skipped) == ["3", "bad"]

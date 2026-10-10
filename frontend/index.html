@@ -353,10 +353,12 @@
                         <div class="filter-section">
                             <h3>Playlist Size</h3>
                             <div class="track-count-selector" role="group" aria-label="Playlist size">
-                                <button class="count-btn" data-count="15" aria-pressed="false">15</button>
                                 <button class="count-btn active" data-count="25" aria-pressed="true">25</button>
                                 <button class="count-btn" data-count="50" aria-pressed="false">50</button>
                                 <button class="count-btn" data-count="100" aria-pressed="false">100</button>
+                                <button class="count-btn" data-count="250" aria-pressed="false">250</button>
+                                <button class="count-btn" data-count="500" aria-pressed="false">500</button>
+                                <input type="number" id="track-count-custom" class="count-input" min="1" max="2000" step="1" placeholder="Custom" aria-label="Custom playlist size">
                             </div>
                         </div>
 
@@ -380,7 +382,7 @@
 
                         <div class="filter-section">
                             <h3>Max Tracks to AI</h3>
-                            <p class="filter-hint">Limit how many tracks are sent to the AI for selection. Higher = better variety but more cost.</p>
+                            <p class="filter-hint">How many tracks the AI scans. Tracks are sent in batches that fit the model's context, so large libraries work with local models; more tracks = better picks but longer runs. Always at least 4&times; the playlist size.</p>
                             <div class="track-limit-selector" role="group" aria-label="Maximum tracks to send to AI">
                                 <button class="limit-btn" data-limit="100" aria-pressed="false">100</button>
                                 <button class="limit-btn" data-limit="250" aria-pressed="false">250</button>

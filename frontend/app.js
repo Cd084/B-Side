@@ -1177,11 +1177,18 @@ function updateFilters() {
     }
 
     // Update track count buttons
+    let presetMatched = false;
     document.querySelectorAll('.count-btn').forEach(btn => {
         const isActive = parseInt(btn.dataset.count) === state.trackCount;
+        presetMatched = presetMatched || isActive;
         btn.classList.toggle('active', isActive);
         btn.setAttribute('aria-pressed', isActive ? 'true' : 'false');
     });
+    const customCount = document.getElementById('track-count-custom');
+    if (customCount && document.activeElement !== customCount) {
+        customCount.value = presetMatched ? '' : state.trackCount;
+        customCount.classList.toggle('active', !presetMatched);
+    }
 
     // Update max tracks to AI buttons
     const maxAllowed = state.config?.max_tracks_to_ai || 3500;
@@ -1208,25 +1215,12 @@ function updateModelSuggestion() {
     const suggestion = document.getElementById('gemini-suggestion');
     if (!suggestion || !state.config) return;
 
-    const provider = state.config.llm_provider;
-    const maxTracks = state.config.max_tracks_to_ai || 3500;
-    const isLocalProvider = state.config.is_local_provider;
-
-    // Cloud provider baselines for comparison
-    const ANTHROPIC_MAX = 3500;  // ~200K context
-    const GEMINI_MAX = 18000;    // ~1M context
-
-    if (isLocalProvider && maxTracks < ANTHROPIC_MAX) {
-        // Local model with small context - suggest a more powerful model
-        suggestion.textContent = 'Switch to a model with a larger context window in Settings for higher track limits.';
-        suggestion.classList.remove('hidden');
-    } else if (!isLocalProvider && provider !== 'gemini') {
-        // Cloud provider that isn't Gemini - suggest Gemini specifically
-        const multiplier = provider === 'openai' ? '8x' : '5x';
-        suggestion.textContent = `Switch to Gemini in Settings for ${multiplier} higher track limits.`;
+    // Selection runs in context-sized batches, so track limits no longer
+    // depend on the model's context window. Show the expected run size instead.
+    if (state.config.is_local_provider) {
+        suggestion.textContent = 'Local model: tracks are scanned in batches. Large scans (5,000+) can take several minutes.';
         suggestion.classList.remove('hidden');
     } else {
-        // Using Gemini or a local model with large context - no suggestion needed
         suggestion.classList.add('hidden');
     }
 }
@@ -1476,17 +1470,19 @@ function recalculateCostDisplay() {
     if (matching_tracks <= 0) {
         tracks_to_send = 0;
     } else if (state.maxTracksToAI === 0 || state.maxTracksToAI >= maxAllowed) {
-        // "Max" mode - send up to model's limit
+        // "Max" mode - send up to the pool limit
         tracks_to_send = Math.min(matching_tracks, maxAllowed);
     } else {
-        tracks_to_send = Math.min(matching_tracks, state.maxTracksToAI);
+        // Pool is always at least 4x the playlist size (see backend effective_pool_size)
+        const pool = Math.min(maxAllowed, Math.max(state.maxTracksToAI, state.trackCount * 4));
+        tracks_to_send = Math.min(matching_tracks, pool);
     }
 
-    // Cost formula (matches backend: separate rates for analysis + generation models)
+    // Cost formula (matches backend preview: batched selection)
     const analysis_input = 1100;
     const analysis_output = 300;
-    const gen_input = tracks_to_send * 40;
-    const gen_output = state.trackCount * 60;
+    const gen_input = Math.floor(tracks_to_send * 25 * 1.3);
+    const gen_output = Math.floor(tracks_to_send * 0.3 * 4) + state.trackCount * 30;
 
     // Analysis model cost (e.g. Sonnet)
     const analysis_in_rate = state.config.analysis_cost_per_million_input ?? state.config.cost_per_million_input;
@@ -1887,9 +1883,7 @@ async function updateOllamaContextDisplay(url, modelName) {
             const defaultNote = isDefault ? ' (default - not detected)' : '';
             contextEl.textContent = `${info.context_window.toLocaleString()} tokens${defaultNote}`;
 
-            // Calculate max tracks: (context - 1000 buffer) / 50 tokens per track
-            const maxTracks = Math.max(100, Math.floor((info.context_window * 0.9 - 1000) / 50));
-            maxTracksEl.textContent = `(~${maxTracks.toLocaleString()} tracks)`;
+            maxTracksEl.textContent = batchSizeLabel(Math.min(info.context_window, OLLAMA_NUM_CTX_CAP));
 
             // Save the context window to config so backend can calculate max_tracks_to_ai
             try {
@@ -1901,7 +1895,7 @@ async function updateOllamaContextDisplay(url, modelName) {
             }
         } else {
             contextEl.textContent = '32,768 tokens (default)';
-            maxTracksEl.textContent = '(~556 tracks)';
+            maxTracksEl.textContent = batchSizeLabel(OLLAMA_NUM_CTX_CAP);
         }
     } catch (error) {
         contextEl.textContent = '-- tokens';
@@ -1914,9 +1908,16 @@ function updateCustomMaxTracks() {
     const maxTracksEl = document.getElementById('custom-max-tracks');
 
     const contextWindow = parseInt(contextInput.value) || 32768;
-    // Calculate max tracks: (context - 1000 buffer) / 50 tokens per track
-    const maxTracks = Math.max(100, Math.floor((contextWindow * 0.9 - 1000) / 50));
-    maxTracksEl.textContent = `(~${maxTracks.toLocaleString()} tracks)`;
+    maxTracksEl.textContent = batchSizeLabel(contextWindow);
+}
+
+// Mirrors backend Ollama num_ctx cap (llm_client.OLLAMA_DEFAULT_NUM_CTX_CAP)
+const OLLAMA_NUM_CTX_CAP = 16384;
+
+function batchSizeLabel(contextTokens) {
+    // ~80% of context for the prompt, ~25 tokens per track line, max 400 per batch
+    const perBatch = Math.max(10, Math.min(400, Math.floor((contextTokens * 0.8 - 400) / 25)));
+    return `(~${perBatch.toLocaleString()} tracks per batch)`;
 }
 
 function validateCustomProviderInputs() {
@@ -2647,6 +2648,15 @@ function setupEventListeners() {
             updateFilters();
             recalculateCostDisplay();
         });
+    });
+    const customCount = document.getElementById('track-count-custom');
+    customCount?.addEventListener('change', () => {
+        const value = parseInt(customCount.value);
+        if (!Number.isFinite(value)) return;
+        state.trackCount = Math.min(2000, Math.max(1, value));
+        customCount.blur();
+        updateFilters();
+        recalculateCostDisplay();
     });
 
     // Note: limit-btn listeners are set up dynamically in updateTrackLimitButtons()
