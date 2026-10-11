@@ -240,6 +240,7 @@ class GenerateRequest(BaseModel):
     decades: list[str]
     track_count: int = Field(25, ge=1, le=MAX_PLAYLIST_TRACKS)
     exclude_live: bool = True
+    exclude_seasonal: bool = True  # drop Christmas/holiday songs (keywords + AI)
     min_rating: int = 0  # 0 = any, 2/4/6/8/10 = minimum rating
     max_tracks_to_ai: int = 500  # 0 = no limit
 

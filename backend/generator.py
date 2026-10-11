@@ -8,6 +8,7 @@ from collections.abc import Generator
 from datetime import datetime
 
 from backend.curation import BatchedSelector, SelectionResult
+from backend.seasonal import is_seasonal, request_is_seasonal
 from backend.llm_client import MAX_TRACK_POOL, LLMResponse, get_llm_client
 from backend.models import GenerateResponse, Track
 from backend.plex_client import PlexQueryError, get_plex_client
@@ -172,6 +173,7 @@ def generate_playlist_stream(
     exclude_live: bool = True,
     min_rating: int = 0,
     max_tracks_to_ai: int = 500,
+    exclude_seasonal: bool = True,
 ) -> Generator[str, None, None]:
     """Generate a playlist with streaming progress updates.
 
@@ -220,6 +222,26 @@ def generate_playlist_stream(
 
         logger.info("Got %d tracks", len(filtered_tracks))
 
+        # Seasonal filter: keywords now, AI screening during selection. Skipped
+        # when the request itself is for holiday music.
+        screen_seasonal = exclude_seasonal
+        if exclude_seasonal and request_is_seasonal(" ".join(filter(None, [prompt, additional_notes]))):
+            screen_seasonal = False
+            yield emit("progress", {
+                "step": "filtering",
+                "message": "Your request mentions holidays, so seasonal songs are allowed.",
+            })
+        if screen_seasonal:
+            before = len(filtered_tracks)
+            filtered_tracks = [t for t in filtered_tracks if not is_seasonal(t)]
+            skipped = before - len(filtered_tracks)
+            logger.info("Excluded %d seasonal tracks by keyword", skipped)
+            if skipped:
+                yield emit("progress", {
+                    "step": "filtering",
+                    "message": f"Skipped {skipped} holiday/seasonal tracks...",
+                })
+
         if not filtered_tracks:
             yield emit("error", {"message": "No tracks match the selected filters. Try broadening your selection."})
             return
@@ -241,7 +263,7 @@ def generate_playlist_stream(
         # Step 4: Batched selection (runs in a worker thread; progress is
         # relayed through a queue so it can be streamed while the LLM works)
         yield emit("progress", {"step": "ai_working", "message": "AI is curating your playlist..."})
-        selector = BatchedSelector(llm_client, request_text)
+        selector = BatchedSelector(llm_client, request_text, exclude_seasonal=screen_seasonal)
         selection: SelectionResult | None = None
         for kind, payload in _run_selection(selector, filtered_tracks, track_count):
             if kind == "event":
@@ -255,10 +277,16 @@ def generate_playlist_stream(
 
         assert selection is not None
         logger.info(
-            "Selection complete: %d tracks, %d rounds, %d LLM calls, %d tokens, %d fallback batches",
+            "Selection complete: %d tracks, %d rounds, %d LLM calls, %d tokens, "
+            "%d fallback batches, %d seasonal tracks replaced",
             len(selection.tracks), selection.rounds, selection.llm_calls,
-            selection.total_tokens, selection.fallback_batches,
+            selection.total_tokens, selection.fallback_batches, selection.seasonal_removed,
         )
+        if selection.seasonal_removed:
+            yield emit("progress", {
+                "step": "ai_working",
+                "message": f"Replaced {selection.seasonal_removed} holiday songs the AI spotted...",
+            })
         if selection.llm_calls and selection.fallback_batches == selection.llm_calls:
             yield emit("error", {
                 "message": "The AI did not return any usable selections. Check that the "
@@ -454,9 +482,12 @@ def _run_selection(
                 "batch_total": total,
             }))
 
+    def on_status(message: str) -> None:
+        events.put(("event", {"step": "ai_working", "message": message}))
+
     def worker() -> None:
         try:
-            events.put(("done", selector.select(pool, track_count, on_round, on_progress)))
+            events.put(("done", selector.select(pool, track_count, on_round, on_progress, on_status)))
         except Exception as e:  # surfaced to the caller
             events.put(("error", e))
 

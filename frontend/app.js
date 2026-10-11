@@ -94,6 +94,7 @@ const state = {
     selectedDecades: [],
     trackCount: 25,
     excludeLive: true,
+    excludeSeasonal: true,
     maxTracksToAI: 500,  // 0 = no limit
     minRating: 0,  // 0 = any, 2/4/6/8 = 1/2/3/4 stars minimum
 
@@ -1202,6 +1203,7 @@ function updateFilters() {
 
     // Update checkboxes
     document.getElementById('exclude-live').checked = state.excludeLive;
+    document.getElementById('exclude-seasonal').checked = state.excludeSeasonal;
 
     // Update rating buttons
     document.querySelectorAll('.rating-btn').forEach(btn => {
@@ -2667,6 +2669,11 @@ function setupEventListeners() {
         updateFilterPreview();
     });
 
+    // Exclude seasonal checkbox (applied at generation; no preview change)
+    document.getElementById('exclude-seasonal').addEventListener('change', e => {
+        state.excludeSeasonal = e.target.checked;
+    });
+
     // Minimum rating buttons
     document.querySelectorAll('.rating-btn').forEach(btn => {
         btn.addEventListener('click', () => {
@@ -3074,6 +3081,7 @@ async function handleGenerate() {
         decades: allDecadesSelected() ? [] : state.selectedDecades,
         track_count: state.trackCount,
         exclude_live: state.excludeLive,
+        exclude_seasonal: state.excludeSeasonal,
         min_rating: state.minRating,
         max_tracks_to_ai: state.maxTracksToAI,
     };

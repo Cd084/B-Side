@@ -34,6 +34,7 @@ from typing import Any
 
 from backend.llm_client import estimate_tokens
 from backend.models import Track
+from backend.seasonal import AI_RULE as SEASONAL_RULE
 
 logger = logging.getLogger(__name__)
 
@@ -100,6 +101,15 @@ PICKS_WITH_REASONS_SCHEMA = {
     "required": ["picks"],
 }
 
+SEASONAL_SCREEN_SYSTEM = """You check playlists for holiday and seasonal songs.
+
+List the numbers of every track that is a holiday or seasonal song: Christmas (including ones like 'Fairytale of New York', 'Sleigh Ride', 'Feliz Navidad'), Hanukkah, Halloween, Thanksgiving, New Year's or Easter songs. Ordinary songs that only mention winter, snow or a season are NOT seasonal.
+
+Return ONLY JSON: {"picks": [numbers]} - use {"picks": []} if there are none."""
+
+# Rounds of screen-and-replace after selection (each round only re-checks replacements)
+SEASONAL_SCREEN_ROUNDS = 3
+
 FINAL_EXAMPLE_IDS = '{"picks": [12, 3, 27]}'
 FINAL_EXAMPLE_REASONS = (
     '{"picks": [{"n": 12, "why": "one short sentence on why it fits"}, '
@@ -118,6 +128,7 @@ class SelectionResult:
     output_tokens: int = 0
     rounds: int = 0
     fallback_batches: int = 0  # batches where the LLM answer was unusable
+    seasonal_removed: int = 0  # tracks the AI flagged as holiday songs and replaced
 
     @property
     def total_tokens(self) -> int:
@@ -266,9 +277,12 @@ def _extract_picks(data: Any, batch: list[Track]) -> tuple[list[int], dict[int, 
 class BatchedSelector:
     """Selects tracks from an arbitrarily large pool using batched LLM calls."""
 
-    def __init__(self, llm_client: Any, request_text: str):
+    def __init__(self, llm_client: Any, request_text: str, exclude_seasonal: bool = False):
         self.llm = llm_client
+        self.exclude_seasonal = exclude_seasonal
         self.request_text = request_text.strip()
+        if exclude_seasonal:
+            self.request_text += "\n" + SEASONAL_RULE
         self.context_window = llm_client.context_window
         self.concurrency = max(1, llm_client.concurrency)
         self._request_tokens = estimate_tokens(self.request_text)
@@ -415,6 +429,7 @@ class BatchedSelector:
         count: int,
         on_round: Callable[[int, int, int], None] | None = None,
         on_progress: Callable[[int, int], None] | None = None,
+        on_status: Callable[[str], None] | None = None,
     ) -> SelectionResult:
         """Select `count` tracks from `pool`.
 
@@ -423,6 +438,7 @@ class BatchedSelector:
             count: Number of tracks wanted
             on_round: Callback(round_number, pool_size, keep) at the start of each round
             on_progress: Callback(batches_done, batches_total) within a round
+            on_status: Callback(message) for other steps (seasonal screening)
         """
         result = SelectionResult(tracks=[])
         pool = list(pool)
@@ -431,7 +447,9 @@ class BatchedSelector:
         if count <= 0:
             return result
 
+        previous_pool = pool
         while len(pool) > count and not self.fits_final_call(pool, count):
+            previous_pool = pool
             keep = max(count, math.ceil(len(pool) * MIN_KEEP_RATIO))
             keep = min(keep, len(pool) - 1)
             result.rounds += 1
@@ -440,7 +458,8 @@ class BatchedSelector:
             pool = self._run_round(pool, keep, result, on_progress)
             random.shuffle(pool)
 
-        if len(pool) > count or self.fits_final_call(pool, count):
+        final_call = len(pool) > count or self.fits_final_call(pool, count)
+        if final_call:
             # Pool fits in one call: let the model pick and order the playlist.
             result.rounds += 1
             if on_round:
@@ -462,7 +481,78 @@ class BatchedSelector:
             # Too many tracks to order in one call: arrange in code.
             result.tracks = spread_artists(pool)
 
+        if self.exclude_seasonal:
+            # Replacements come from the runners-up of the last stage
+            chosen = {t.rating_key for t in result.tracks}
+            runners_up = [t for t in (pool if final_call else previous_pool) if t.rating_key not in chosen]
+            self._screen_seasonal(result, runners_up, on_status)
+
         return result
+
+    # ---- seasonal screening ----------------------------------------------
+
+    def _flag_seasonal(self, tracks: list[Track], result: SelectionResult) -> set[str]:
+        """Ask the analysis model which tracks are holiday/seasonal songs.
+
+        Uses the stronger model: it only sees the finished playlist, and in
+        testing caught more keyword-less holiday songs than a small model.
+        """
+        line_budget = self._line_budget(SEASONAL_SCREEN_SYSTEM, 200)
+        flagged: set[str] = set()
+        for batch in _pack_batches(tracks, line_budget, MAX_BATCH_SIZE):
+            listing = "\n".join(format_track_line(i + 1, t) for i, t in enumerate(batch))
+            prompt = (
+                f"Tracks (1-{len(batch)}):\n{listing}\n\n"
+                "Which of these are holiday or seasonal songs? Reply with the JSON object only."
+            )
+            result.llm_calls += 1
+            try:
+                response = self.llm.analyze(
+                    prompt, SEASONAL_SCREEN_SYSTEM, max_output_tokens=200, json_mode=PICKS_SCHEMA
+                )
+                result.input_tokens += response.input_tokens
+                result.output_tokens += response.output_tokens
+                picks, _ = _extract_picks(self.llm.parse_json_response(response), batch)
+            except Exception as e:
+                logger.warning("Seasonal screen of %d tracks failed: %s", len(batch), e)
+                continue
+            # A model flagging most of a batch has misread the task; ignore it.
+            if len(picks) > max(5, len(batch) // 2):
+                logger.warning("Seasonal screen flagged %d of %d tracks; ignoring", len(picks), len(batch))
+                continue
+            flagged.update(batch[i].rating_key for i in picks)
+        return flagged
+
+    def _screen_seasonal(
+        self,
+        result: SelectionResult,
+        runners_up: list[Track],
+        on_status: Callable[[str], None] | None,
+    ) -> None:
+        """Drop seasonal songs the AI finds in the playlist, refilling from runners-up."""
+        to_check = list(result.tracks)
+        removed = 0
+        for _ in range(SEASONAL_SCREEN_ROUNDS):
+            if not to_check:
+                break
+            if on_status:
+                on_status(f"Checking {len(to_check)} tracks for holiday songs...")
+            flagged = self._flag_seasonal(to_check, result)
+            if not flagged:
+                break
+            logger.info(
+                "Seasonal screen removed: %s",
+                [f"{t.artist} - {t.title}" for t in result.tracks if t.rating_key in flagged],
+            )
+            removed += len(flagged)
+            result.tracks = [t for t in result.tracks if t.rating_key not in flagged]
+            for key in flagged:
+                result.reasons.pop(key, None)
+            refill = [t for t in runners_up if t.rating_key not in flagged][: len(flagged)]
+            runners_up = runners_up[len(refill):]
+            result.tracks.extend(refill)
+            to_check = refill
+        result.seasonal_removed = removed
 
 
 def spread_artists(tracks: list[Track]) -> list[Track]:
