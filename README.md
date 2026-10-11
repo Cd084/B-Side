@@ -1,13 +1,12 @@
-# MediaSage for Plex
+# B-Side
+
+**A fork of [MediaSage](https://github.com/ecwilsonaz/mediasage) by ecwilsonaz, rebuilt for large libraries, large playlists and local LLMs.**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Docker Hub](https://img.shields.io/badge/docker-ecwilson%2Fmediasage-blue)](https://hub.docker.com/r/ecwilson/mediasage)
-[![GHCR](https://img.shields.io/badge/ghcr-ecwilsonaz%2Fmediasage-blue)](https://ghcr.io/ecwilsonaz/mediasage)
-[![Python 3.14+](https://img.shields.io/badge/python-3.14+-blue.svg)](https://www.python.org/downloads/)
 
 **AI-powered playlists and album recommendations for Plex—using only music you actually own.**
 
-> **This fork: large libraries, large playlists, local LLMs.** Upstream MediaSage
+> **What B-Side changes.** Upstream MediaSage
 > sends the whole candidate list to the model in one prompt and asks for the
 > whole playlist back in one JSON answer. With local models that overflows the
 > context window, so you end up building playlists 10–20 tracks at a time. This
@@ -32,6 +31,16 @@
 >   while a larger one curates. Selection calls use a strict JSON schema and low
 >   temperature (no failed batches in testing vs. intermittent ones with plain
 >   JSON mode at the model's default temperature).
+>
+> - **Exclude seasonal** (default on): keyword filter plus AI screening keeps
+>   Christmas and other holiday songs out of playlists.
+> - **Library stays current**: background re-sync every 24h (`auto_sync_hours`),
+>   a banner when the library is out of date, and syncs that keep the old
+>   snapshot usable until the new one is complete.
+>
+> The rest of this README is upstream's; Docker image names and links there
+> refer to the original MediaSage project. To run B-Side in Docker, build it
+> from this repository (`docker compose up -d --build`).
 >
 > Tuning: `OLLAMA_NUM_CTX` (context per call) and `LLM_CONCURRENCY` (parallel
 > batch calls). See `config.example.yaml`.

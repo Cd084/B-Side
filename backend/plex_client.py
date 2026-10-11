@@ -110,6 +110,10 @@ class PlexQueryError(Exception):
 # Fuzzy matching threshold (0-100)
 FUZZ_THRESHOLD = 60
 
+# Auto-created playlist for "play now"; the legacy title is still recognised
+SCRATCH_PLAYLIST_TITLE = "B-Side - Now Playing"
+LEGACY_SCRATCH_PLAYLIST_TITLES = ("MediaSage - Now Playing",)
+
 # Max rating keys per Plex request when fetching/adding playlist items
 # (plexapi puts all keys in one URL; very long URLs are rejected).
 PLAYLIST_CHUNK_SIZE = 200
@@ -878,7 +882,7 @@ class PlexClient:
     ) -> dict[str, Any]:
         """Update an existing Plex playlist by replacing or appending tracks.
 
-        Handles the __scratch__ sentinel for auto-creating "MediaSage - Now Playing".
+        Handles the __scratch__ sentinel for auto-creating the "Now Playing" playlist.
 
         Args:
             playlist_id: Rating key of target playlist, or "__scratch__" sentinel
@@ -894,13 +898,13 @@ class PlexClient:
             return {"success": False, "error": "Not connected to Plex"}
 
         try:
-            # Handle __scratch__ sentinel — find or create "MediaSage - Now Playing"
+            # Handle __scratch__ sentinel — find or create the "Now Playing" playlist
             if playlist_id == "__scratch__":
                 with self._scratch_lock:
                     scratch_playlist = None
                     try:
                         for p in self._server.playlists(playlistType="audio"):
-                            if p.title == "MediaSage - Now Playing":
+                            if p.title in (SCRATCH_PLAYLIST_TITLE, *LEGACY_SCRATCH_PLAYLIST_TITLES):
                                 scratch_playlist = p
                                 break
                     except Exception as e:
@@ -915,7 +919,7 @@ class PlexClient:
                             return {"success": False, "error": "No valid tracks found"}
 
                         playlist = self._create_playlist_chunked(
-                            "MediaSage - Now Playing", items
+                            SCRATCH_PLAYLIST_TITLE, items
                         )
 
                         if description:

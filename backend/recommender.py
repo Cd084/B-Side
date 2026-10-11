@@ -1,4 +1,4 @@
-"""Album recommendation pipeline for MediaSage.
+"""Album recommendation pipeline for B-Side.
 
 Implements the 4-call LLM pipeline: gap analysis, question generation,
 album selection, and pitch writing. Maintains in-memory session state

@@ -1,4 +1,4 @@
-"""FastAPI application for MediaSage."""
+"""FastAPI application for B-Side."""
 
 import asyncio
 import json
@@ -170,7 +170,7 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(
-    title="MediaSage",
+    title="B-Side",
     description="Plex playlist generator powered by LLMs",
     version=get_version(),
     lifespan=lifespan,
@@ -1737,4 +1737,4 @@ async def serve_index():
         html = html.replace("/static/style.css", f"/static/style.css?v={v}")
         html = html.replace("/static/app.js", f"/static/app.js?v={v}")
         return HTMLResponse(html, headers={"Cache-Control": "no-cache"})
-    return {"message": "MediaSage API is running. Frontend not found."}
+    return {"message": "B-Side API is running. Frontend not found."}

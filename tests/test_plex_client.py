@@ -1031,7 +1031,7 @@ class TestPlexClientUpdatePlaylist:
         assert result["duplicates_skipped"] == 2
 
     def test_update_playlist_scratch_creates_if_not_found(self):
-        """Should create 'MediaSage - Now Playing' when __scratch__ and no existing match."""
+        """Should create 'B-Side - Now Playing' when __scratch__ and no existing match."""
         from backend.plex_client import PlexClient
 
         new_track_1 = self._make_mock_track(201)
@@ -1065,9 +1065,9 @@ class TestPlexClientUpdatePlaylist:
         # Verify createPlaylist was called with correct title and track items
         mock_server.createPlaylist.assert_called_once()
         create_call = mock_server.createPlaylist.call_args
-        # Title should be "MediaSage - Now Playing" — check positional or keyword arg
+        # Title should be "B-Side - Now Playing" — check positional or keyword arg
         call_title = create_call[0][0] if create_call[0] else create_call[1].get("title")
-        assert call_title == "MediaSage - Now Playing"
+        assert call_title == "B-Side - Now Playing"
 
         assert result["success"] is True
 

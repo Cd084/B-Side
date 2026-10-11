@@ -1,1 +1,1 @@
-"""MediaSage test suite."""
+"""B-Side test suite."""

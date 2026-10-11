@@ -1,4 +1,6 @@
-# MediaSage Development Guidelines
+# B-Side Development Guidelines
+
+B-Side is a fork of MediaSage (https://github.com/ecwilsonaz/mediasage). Upstream remote: `upstream`.
 
 Auto-generated from feature plans. Last updated: 2026-02-04
 

@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>MediaSage</title>
+    <title>B-Side</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,100..1000;1,9..40,100..1000&display=swap" rel="stylesheet">
@@ -14,7 +14,7 @@
     <div class="app">
         <!-- Header -->
         <header class="header">
-            <h1 class="logo"><a href="#home" class="logo-link">MediaSage</a></h1>
+            <h1 class="logo"><a href="#home" class="logo-link">B-Side</a></h1>
             <nav class="nav" role="navigation" aria-label="Main navigation">
                 <div class="nav-dropdown">
                     <button class="nav-dropdown-trigger" aria-expanded="false" aria-haspopup="true">
@@ -46,7 +46,7 @@
                 <!-- Setup Wizard (shown on first launch) -->
                 <div id="setup-wizard" class="setup-wizard hidden">
                     <div class="setup-header">
-                        <h2 class="setup-title">Welcome to MediaSage</h2>
+                        <h2 class="setup-title">Welcome to B-Side</h2>
                         <p class="setup-subtitle">Let's get you set up. This should only take a minute.</p>
                     </div>
 
@@ -55,7 +55,7 @@
                         <div class="setup-warning-icon" aria-hidden="true">!</div>
                         <div class="setup-warning-text">
                             <strong>Data directory is not writable</strong>
-                            <p>MediaSage cannot write to its data directory. This is usually a Docker volume permissions issue.</p>
+                            <p>B-Side cannot write to its data directory. This is usually a Docker volume permissions issue.</p>
                             <p id="setup-data-fix" class="setup-warning-fix"></p>
                         </div>
                     </div>
@@ -432,7 +432,7 @@
                                 </div>
                                 <div id="playlist-picker-container" class="playlist-picker-container hidden">
                                     <select id="playlist-picker" class="playlist-picker-select" aria-label="Select playlist to update">
-                                        <option value="__scratch__">MediaSage - Now Playing</option>
+                                        <option value="__scratch__">B-Side - Now Playing</option>
                                     </select>
                                 </div>
                                 <div id="narrative-box" class="narrative-box hidden"></div>
@@ -706,8 +706,8 @@
                     <!-- Ollama Settings -->
                     <div id="ollama-settings" class="provider-settings hidden">
                         <div class="experimental-warning">
-                            <strong>Experimental Feature</strong>
-                            <p>Local LLM support is experimental. Please <a href="https://github.com/ecwilsonaz/mediasage/issues" target="_blank" rel="noopener">report issues on GitHub</a>.</p>
+                            <strong>Local model tips</strong>
+                            <p>Pick a strong Analysis model (final picks) and a small, fast Generation model (library scanning). Large libraries are scanned in batches, so a 16k context is plenty.</p>
                         </div>
                         <div class="form-group">
                             <label for="ollama-url">Ollama URL</label>
@@ -739,8 +739,8 @@
                     <!-- Custom Provider Settings -->
                     <div id="custom-settings" class="provider-settings hidden">
                         <div class="experimental-warning">
-                            <strong>Experimental Feature</strong>
-                            <p>Local LLM support is experimental. Please <a href="https://github.com/ecwilsonaz/mediasage/issues" target="_blank" rel="noopener">report issues on GitHub</a>.</p>
+                            <strong>Local model tips</strong>
+                            <p>Pick a strong Analysis model (final picks) and a small, fast Generation model (library scanning). Large libraries are scanned in batches, so a 16k context is plenty.</p>
                         </div>
                         <div class="form-group">
                             <label for="custom-url">API Base URL</label>
@@ -906,7 +906,7 @@
         <!-- Footer -->
         <footer class="app-footer app-footer--loading">
             <div class="footer-left">
-                <a href="https://github.com/ecwilsonaz/mediasage" target="_blank" rel="noopener" class="footer-brand">MediaSage <span id="footer-version"></span></a>
+                <a href="https://github.com/ecwilsonaz/mediasage" target="_blank" rel="noopener" class="footer-brand" title="B-Side is a fork of MediaSage by ecwilsonaz">B-Side <span id="footer-version"></span></a>
                 <span class="footer-separator">·</span>
                 <span id="footer-model" class="footer-model">--</span>
             </div>

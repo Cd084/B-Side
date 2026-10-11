@@ -1,6 +1,9 @@
 /**
- * MediaSage - Frontend Application
+ * B-Side - Frontend Application (fork of MediaSage)
  */
+
+// Mirrors backend plex_client.SCRATCH_PLAYLIST_TITLE
+const SCRATCH_PLAYLIST_TITLE = 'B-Side - Now Playing';
 
 // =============================================================================
 // Focus Management (Accessibility)
@@ -404,16 +407,16 @@ function generatePlaylistStream(request, onProgress, onComplete, onError) {
                                 state.userRequest = data.user_request || '';
                                 // Initialize tracks array for batched receiving
                                 state.pendingTracks = [];
-                                console.log('[MediaSage] Narrative received:', state.playlistTitle);
+                                console.log('[B-Side] Narrative received:', state.playlistTitle);
                             } else if (currentEvent === 'tracks') {
                                 // Accumulate track batches
                                 if (data.batch && Array.isArray(data.batch)) {
                                     state.pendingTracks = state.pendingTracks || [];
                                     state.pendingTracks.push(...data.batch);
-                                    console.log('[MediaSage] Track batch received, total:', state.pendingTracks.length);
+                                    console.log('[B-Side] Track batch received, total:', state.pendingTracks.length);
                                 }
                             } else if (currentEvent === 'complete') {
-                                console.log('[MediaSage] Complete event received, pending tracks:', state.pendingTracks?.length || 0);
+                                console.log('[B-Side] Complete event received, pending tracks:', state.pendingTracks?.length || 0);
                                 clearTimeoutHandler();
                                 completed = true;
                                 // Merge accumulated tracks into complete data
@@ -428,7 +431,7 @@ function generatePlaylistStream(request, onProgress, onComplete, onError) {
                                 onError(new Error(data.message));
                             }
                         } catch (e) {
-                            console.error('[MediaSage] Failed to parse SSE event:', currentEvent, e);
+                            console.error('[B-Side] Failed to parse SSE event:', currentEvent, e);
                         }
                         currentEvent = null;
                         currentData = '';
@@ -438,11 +441,11 @@ function generatePlaylistStream(request, onProgress, onComplete, onError) {
                 if (done) {
                     clearTimeoutHandler();
                     if (buffer.trim().length > 0) {
-                        console.warn('[MediaSage] Stream ended with unparsed buffer:', buffer);
+                        console.warn('[B-Side] Stream ended with unparsed buffer:', buffer);
                     }
                     // iOS Safari fallback: if stream ended without complete event but we have tracks
                     if (state.pendingTracks && state.pendingTracks.length > 0 && !completed) {
-                        console.warn('[MediaSage] Stream ended without complete event, synthesizing completion with', state.pendingTracks.length, 'tracks');
+                        console.warn('[B-Side] Stream ended without complete event, synthesizing completion with', state.pendingTracks.length, 'tracks');
                         const syntheticComplete = {
                             tracks: state.pendingTracks,
                             track_count: state.pendingTracks.length,
@@ -1346,7 +1349,7 @@ let filterPreviewController = null;
 let filterPreviewLoadingTimeout = null;
 
 async function updateFilterPreview() {
-    console.log('[MediaSage] updateFilterPreview called');
+    console.log('[B-Side] updateFilterPreview called');
     const previewTracks = document.getElementById('preview-tracks');
     const previewCost = document.getElementById('preview-cost');
 
@@ -1377,7 +1380,7 @@ async function updateFilterPreview() {
             min_rating: state.minRating,
             exclude_live: state.excludeLive,
         };
-        console.log('[MediaSage] Filter preview request:', requestBody);
+        console.log('[B-Side] Filter preview request:', requestBody);
 
         const response = await fetch('/api/filter/preview', {
             method: 'POST',
@@ -1391,7 +1394,7 @@ async function updateFilterPreview() {
         }
 
         const data = await response.json();
-        console.log('[MediaSage] Filter preview response:', data);
+        console.log('[B-Side] Filter preview response:', data);
 
         // Clear loading timeout - response arrived fast
         clearTimeout(filterPreviewLoadingTimeout);
@@ -1409,7 +1412,7 @@ async function updateFilterPreview() {
 
         // Ignore abort errors - they're expected when cancelling
         if (error.name === 'AbortError') {
-            console.log('[MediaSage] Filter preview request cancelled');
+            console.log('[B-Side] Filter preview request cancelled');
             return;
         }
         console.error('Filter preview error:', error);
@@ -2334,7 +2337,7 @@ function updateFooterLibraryStatus(status) {
     } else {
         syncTime.textContent = `synced ${formatRelativeTime(status.synced_at)}`;
         const auto = status.auto_sync_hours > 0
-            ? `Syncs automatically every ${status.auto_sync_hours} hours while MediaSage is running.`
+            ? `Syncs automatically every ${status.auto_sync_hours} hours while B-Side is running.`
             : 'Automatic sync is off.';
         const library = status.music_library ? `Plex library: "${status.music_library}". ` : '';
         syncTime.title = `${library}Last synced ${new Date(status.synced_at).toLocaleString()}. ${auto}`;
@@ -2355,7 +2358,7 @@ function updateStaleLibraryBanner(status) {
     if (!stale) return;
     const days = Math.floor(ageDays);
     const auto = status.auto_sync_hours > 0
-        ? ' Automatic sync only runs while MediaSage is open.'
+        ? ' Automatic sync only runs while B-Side is open.'
         : ' Automatic sync is turned off.';
     document.getElementById('library-stale-detail').textContent =
         ` Last synced ${syncedAt.toLocaleDateString()} (${days} days ago). Music added to Plex since then won't be used in playlists until you sync.${auto}`;
@@ -3613,16 +3616,16 @@ async function fetchAndPopulatePlaylists() {
             state.plexPlaylists = await fetchPlexPlaylists();
         } catch (error) {
             showError('Failed to load playlists: ' + error.message);
-            picker.innerHTML = '<option value="__scratch__">MediaSage - Now Playing</option>';
+            picker.innerHTML = `<option value="__scratch__">${SCRATCH_PLAYLIST_TITLE}</option>`;
             return;
         }
     }
 
     // Rebuild picker options: fixed scratch option first, then server playlists
-    picker.innerHTML = '<option value="__scratch__">MediaSage - Now Playing</option>';
+    picker.innerHTML = `<option value="__scratch__">${SCRATCH_PLAYLIST_TITLE}</option>`;
     for (const pl of state.plexPlaylists) {
-        // Skip if it's the same as the scratch playlist title (avoid duplicate)
-        if (pl.title === 'MediaSage - Now Playing') continue;
+        // Skip the scratch playlist (current or legacy title) to avoid a duplicate
+        if (pl.title === SCRATCH_PLAYLIST_TITLE || pl.title === 'MediaSage - Now Playing') continue;
         const option = document.createElement('option');
         option.value = pl.rating_key;
         option.textContent = `${pl.title} (${pl.track_count} tracks)`;
