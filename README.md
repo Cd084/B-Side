@@ -27,6 +27,12 @@
 >   request) instead of one request per track and one giant URL.
 > - Streams per-batch progress with heartbeats so long local runs don't time out.
 >
+> - **Two-model scanning**: batch rounds run on the *Generation* model and the
+>   final pick-and-order on the *Analysis* model, so a small fast model can scan
+>   while a larger one curates. Selection calls use a strict JSON schema and low
+>   temperature (no failed batches in testing vs. intermittent ones with plain
+>   JSON mode at the model's default temperature).
+>
 > Tuning: `OLLAMA_NUM_CTX` (context per call) and `LLM_CONCURRENCY` (parallel
 > batch calls). See `config.example.yaml`.
 

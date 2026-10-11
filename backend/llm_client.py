@@ -59,6 +59,9 @@ OLLAMA_DEFAULT_NUM_CTX_CAP = 16384
 # limited by context size because tracks are scanned in context-sized batches.
 MAX_TRACK_POOL = 20000
 
+# Sampling temperature for JSON-mode (selection) calls on Ollama
+SELECTION_TEMPERATURE = 0.2
+
 
 def estimate_tokens(text: str) -> int:
     """Conservative token estimate (~3 chars/token) for budgeting prompts."""
@@ -203,7 +206,7 @@ class LLMClient:
         system: str,
         model: str,
         max_output_tokens: int | None = None,
-        json_mode: bool = False,
+        json_mode: bool | dict = False,
     ) -> LLMResponse:
         """Make a completion request to OpenAI or custom OpenAI-compatible endpoint."""
         logger.info("Calling OpenAI-compatible API with %d char prompt", len(prompt))
@@ -318,7 +321,7 @@ class LLMClient:
         model: str,
         timeout: float = 600.0,
         max_output_tokens: int | None = None,
-        json_mode: bool = False,
+        json_mode: bool | dict = False,
     ) -> LLMResponse:
         """Make a completion request to Ollama.
 
@@ -350,7 +353,12 @@ class LLMClient:
             "keep_alive": "30m",
         }
         if json_mode:
-            payload["format"] = "json"
+            # A schema constrains output far more tightly than generic "json",
+            # under which models can loop on whitespace until num_predict.
+            payload["format"] = json_mode if isinstance(json_mode, dict) else "json"
+            # Structured selection wants determinism, not creative sampling
+            # (some models ship with temperature 1.0).
+            payload["options"]["temperature"] = SELECTION_TEMPERATURE
         if self._ollama_supports_thinking(model):
             # Reasoning models would spend the small num_predict budget of a
             # batch call on hidden thinking and never emit the JSON answer.
@@ -436,15 +444,16 @@ class LLMClient:
         system: str,
         model: str,
         max_output_tokens: int | None = None,
-        json_mode: bool = False,
+        json_mode: bool | dict = False,
     ) -> LLMResponse:
         """Make a completion request to the configured provider.
 
         Args:
             max_output_tokens: Output cap (local providers are further bounded
                 by the context left after the prompt)
-            json_mode: Ask the provider to constrain output to valid JSON
-                (Ollama only; others rely on prompting + repair)
+            json_mode: Constrain output to valid JSON; pass a JSON schema dict
+                to constrain its shape (Ollama). Custom endpoints get
+                json_object mode; others rely on prompting + repair.
         """
         if self.provider == "anthropic":
             return self._complete_anthropic(prompt, system, model, max_output_tokens)

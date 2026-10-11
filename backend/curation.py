@@ -18,6 +18,10 @@ This module instead runs a tournament:
 
 Picks are validated against the batch and topped up from unpicked tracks when
 the model returns too few, so the result always has the requested size.
+
+Batch rounds run on the *generation* model and the final call on the
+*analysis* model, so a small fast model can do the bulk scanning while a
+stronger model makes the final choices and ordering.
 """
 
 import logging
@@ -75,6 +79,26 @@ Return ONLY JSON in this exact form, in playlist order, using the numbers from t
 Rules:
 - Exactly {k} entries, each number from the list, no duplicates.
 - No markdown, no text outside the JSON object."""
+
+PICKS_SCHEMA = {
+    "type": "object",
+    "properties": {"picks": {"type": "array", "items": {"type": "integer"}}},
+    "required": ["picks"],
+}
+PICKS_WITH_REASONS_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "picks": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {"n": {"type": "integer"}, "why": {"type": "string"}},
+                "required": ["n", "why"],
+            },
+        }
+    },
+    "required": ["picks"],
+}
 
 FINAL_EXAMPLE_IDS = '{"picks": [12, 3, 27]}'
 FINAL_EXAMPLE_REASONS = (
@@ -302,9 +326,11 @@ class BatchedSelector:
         outcome = _BatchOutcome(picks=[], reasons={})
         for attempt in range(BATCH_ATTEMPTS):
             try:
-                response = self.llm.generate(
-                    prompt, system, max_output_tokens=out_tokens, json_mode=True
-                )
+                # Batch rounds use the generation model (can be a small, fast
+                # model); the final pick-and-order call uses the analysis model.
+                complete = self.llm.analyze if final else self.llm.generate
+                schema = PICKS_WITH_REASONS_SCHEMA if with_reasons else PICKS_SCHEMA
+                response = complete(prompt, system, max_output_tokens=out_tokens, json_mode=schema)
                 outcome.input_tokens += response.input_tokens
                 outcome.output_tokens += response.output_tokens
                 data = self.llm.parse_json_response(response)

@@ -47,7 +47,7 @@ class FakeLocalModel:
         used = estimate_tokens(prompt) + estimate_tokens(system)
         self.max_prompt_tokens = max(self.max_prompt_tokens, used)
         assert used + (max_output_tokens or 0) <= self.context, "prompt + output overflow context"
-        assert json_mode
+        assert isinstance(json_mode, dict) and "picks" in json_mode["properties"]
 
         k = int(re.search(r"Choose (\d+) of these", prompt).group(1))
         lines = LINE_RE.findall(prompt.split("Tracks (", 1)[1])
@@ -195,6 +195,7 @@ def test_ollama_request_sets_num_ctx_and_json(mocker):
     assert payload["options"]["num_ctx"] == 16384  # capped native 128k
     assert payload["options"]["num_predict"] == 100
     assert payload["format"] == "json"
+    assert payload["options"]["temperature"] == 0.2
 
 
 def test_parse_json_handles_curly_quotes():
@@ -267,3 +268,21 @@ def test_custom_warns_on_server_side_truncation(mocker, caplog):
     create.return_value = ok
     client.generate("x" * 30000, "s", json_mode=True)
     assert "truncating input" in caplog.text
+
+
+def test_batches_use_generation_model_and_final_uses_analysis_model():
+    client = LLMClient(LLMConfig(
+        provider="ollama", model_analysis="big", model_generation="small",
+        ollama_context_window=8192,
+    ))
+    fake = FakeLocalModel(8192)
+    models = []
+
+    def recording(prompt, system, model, **kw):
+        models.append(model)
+        return fake(prompt, system, model, **kw)
+
+    client._complete = recording
+    BatchedSelector(client, "jazz").select(make_pool(3000), 25)
+    assert models[-1] == "big"
+    assert set(models[:-1]) == {"small"}
