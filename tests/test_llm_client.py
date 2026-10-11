@@ -402,7 +402,7 @@ class TestCustomProvider:
 
         client._complete("test prompt", "system prompt", "my-model")
 
-        mock_openai_method.assert_called_once_with("test prompt", "system prompt", "my-model", None)
+        mock_openai_method.assert_called_once_with("test prompt", "system prompt", "my-model", None, False)
 
 
 class TestLocalProviderCosts:

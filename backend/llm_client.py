@@ -118,6 +118,7 @@ class LLMClient:
         self.provider = config.provider
         self._client: Any = None
         self._ollama_thinking: dict[str, bool] = {}  # model -> supports thinking
+        self._json_mode_supported = True  # custom endpoints; cleared on rejection
 
         if config.provider == "anthropic":
             self._client = anthropic.Anthropic(api_key=config.api_key)
@@ -197,20 +198,38 @@ class LLMClient:
         )
 
     def _complete_openai(
-        self, prompt: str, system: str, model: str, max_output_tokens: int | None = None
+        self,
+        prompt: str,
+        system: str,
+        model: str,
+        max_output_tokens: int | None = None,
+        json_mode: bool = False,
     ) -> LLMResponse:
         """Make a completion request to OpenAI or custom OpenAI-compatible endpoint."""
         logger.info("Calling OpenAI-compatible API with %d char prompt", len(prompt))
-        response = self._client.chat.completions.create(
-            model=model,
+        kwargs: dict[str, Any] = {
+            "model": model,
             # Bounded by the remaining context for local endpoints, which reject
             # (or silently truncate) requests where prompt + max_tokens > context.
-            max_tokens=self._output_budget(prompt, system, max_output_tokens),
-            messages=[
+            "max_tokens": self._output_budget(prompt, system, max_output_tokens),
+            "messages": [
                 {"role": "system", "content": system},
                 {"role": "user", "content": prompt},
             ],
-        )
+        }
+        use_json = json_mode and self.provider == "custom" and self._json_mode_supported
+        if use_json:
+            kwargs["response_format"] = {"type": "json_object"}
+        try:
+            response = self._client.chat.completions.create(**kwargs)
+        except openai.BadRequestError as e:
+            if not use_json:
+                raise
+            # Some servers (e.g. LM Studio) reject json_object; fall back to prompting.
+            logger.info("Endpoint rejected JSON mode, continuing without it: %s", e)
+            self._json_mode_supported = False
+            del kwargs["response_format"]
+            response = self._client.chat.completions.create(**kwargs)
         logger.debug("OpenAI-compatible response received")
 
         choice = response.choices[0]
@@ -221,6 +240,8 @@ class LLMClient:
         # Use getattr for safe token access (custom providers may omit usage)
         input_tokens = getattr(response.usage, "prompt_tokens", 0) if response.usage else 0
         output_tokens = getattr(response.usage, "completion_tokens", 0) if response.usage else 0
+        if self.provider == "custom":
+            self._check_prompt_truncation(prompt, system, input_tokens)
         return LLMResponse(
             content=content,
             input_tokens=input_tokens,
@@ -373,6 +394,23 @@ class LLMClient:
             truncated=truncated,
         )
 
+    def _check_prompt_truncation(self, prompt: str, system: str, reported_tokens: int) -> None:
+        """Warn when a server reports far fewer prompt tokens than were sent.
+
+        Proxies (e.g. LiteLLM in front of Ollama) can run the model with a
+        smaller context than configured here; the server then silently drops
+        the start of the prompt.
+        """
+        estimated = estimate_tokens(prompt) + estimate_tokens(system)
+        if estimated > 1500 and 0 < reported_tokens < estimated * 0.5:
+            logger.warning(
+                "Server counted only %d prompt tokens for a ~%d token prompt: the model "
+                "is probably running with a smaller context than the configured %d and "
+                "truncating input. Raise the backend's context (e.g. num_ctx) or lower "
+                "the Context Window setting.",
+                reported_tokens, estimated, self.context_window,
+            )
+
     def _ollama_supports_thinking(self, model: str) -> bool:
         """Whether an Ollama model reports the 'thinking' capability (cached)."""
         if model not in self._ollama_thinking:
@@ -411,7 +449,7 @@ class LLMClient:
         if self.provider == "anthropic":
             return self._complete_anthropic(prompt, system, model, max_output_tokens)
         elif self.provider in ("openai", "custom"):
-            return self._complete_openai(prompt, system, model, max_output_tokens)
+            return self._complete_openai(prompt, system, model, max_output_tokens, json_mode)
         elif self.provider == "gemini":
             return self._complete_gemini(prompt, system, model)
         elif self.provider == "ollama":

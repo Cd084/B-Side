@@ -226,3 +226,44 @@ def test_parse_json_strips_think_block():
         input_tokens=0, output_tokens=0, model="m",
     )
     assert client.parse_json_response(resp) == {"picks": [4]}
+
+
+def _custom_client(mocker):
+    mocker.patch("backend.llm_client.openai.OpenAI")
+    client = LLMClient(LLMConfig(
+        provider="custom", model_analysis="m", model_generation="m",
+        custom_url="http://proxy:4000/v1", custom_context_window=16384,
+    ))
+    choice = mocker.MagicMock(finish_reason="stop")
+    choice.message.content = '{"picks": [1]}'
+    ok = mocker.MagicMock(choices=[choice])
+    ok.usage.prompt_tokens = 10
+    ok.usage.completion_tokens = 3
+    return client, client._client.chat.completions.create, ok
+
+
+def test_custom_json_mode_falls_back_when_rejected(mocker):
+    import httpx
+    import openai
+
+    client, create, ok = _custom_client(mocker)
+    rejected = openai.BadRequestError(
+        "json_object not supported",
+        response=httpx.Response(400, request=httpx.Request("POST", "http://proxy")),
+        body=None,
+    )
+    create.side_effect = [rejected, ok, ok]
+    client.generate("p", "s", json_mode=True)
+    client.generate("p", "s", json_mode=True)
+    calls = create.call_args_list
+    assert calls[0].kwargs["response_format"] == {"type": "json_object"}
+    assert "response_format" not in calls[1].kwargs
+    assert "response_format" not in calls[2].kwargs  # remembered
+
+
+def test_custom_warns_on_server_side_truncation(mocker, caplog):
+    client, create, ok = _custom_client(mocker)
+    ok.usage.prompt_tokens = 2048  # server ran with a 2k context
+    create.return_value = ok
+    client.generate("x" * 30000, "s", json_mode=True)
+    assert "truncating input" in caplog.text
