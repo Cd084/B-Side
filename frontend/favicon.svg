@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <!-- B-Side: a vinyl record with an amber "B" label -->
+  <rect width="64" height="64" rx="14" fill="#1a1a1a"/>
+  <circle cx="32" cy="32" r="27" fill="#0b0b0b"/>
+  <g fill="none" stroke="#2c2c2c" stroke-width="1.2">
+    <circle cx="32" cy="32" r="23"/>
+    <circle cx="32" cy="32" r="19.5"/>
+  </g>
+  <path d="M14.5 21.5 A21 21 0 0 1 24 12.8" fill="none" stroke="#4a4a4a" stroke-width="2" stroke-linecap="round"/>
+  <circle cx="32" cy="32" r="16.5" fill="#e5a00d"/>
+  <path fill="#1a1a1a" fill-rule="evenodd" transform="translate(32 32) scale(1.25) translate(-32.8 -32)" d="M26.5 24.5H33.6C36.7 24.5 38.4 26.1 38.4 28.3C38.4 29.8 37.6 31 36.3 31.5C38 32 39.1 33.4 39.1 35.3C39.1 37.8 37.3 39.5 34.1 39.5H26.5Z M29.9 27.3V30.4H33.2C34.4 30.4 35.1 29.8 35.1 28.85C35.1 27.9 34.4 27.3 33.2 27.3Z M29.9 33V36.7H33.6C35 36.7 35.8 36 35.8 34.85C35.8 33.7 35 33 33.6 33Z"/>
+</svg>

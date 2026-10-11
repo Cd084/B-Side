@@ -13,7 +13,7 @@ from urllib.parse import quote
 
 from fastapi import FastAPI, HTTPException, Query, Request, Response
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse
 from starlette.responses import StreamingResponse
 import httpx
 
@@ -1725,6 +1725,12 @@ if frontend_path.exists():
         StaticFiles(directory=frontend_path),
         name="static",
     )
+
+
+@app.get("/favicon.ico", include_in_schema=False)
+async def serve_favicon():
+    """Browsers request /favicon.ico directly, whatever the page links to."""
+    return FileResponse(frontend_path / "favicon.ico", media_type="image/x-icon")
 
 
 @app.get("/")
