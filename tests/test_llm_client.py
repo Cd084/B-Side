@@ -285,6 +285,7 @@ class TestOllamaProvider:
             mock_httpx.return_value = mock_client_instance
 
             client = LLMClient(config)
+            client._ollama_thinking["llama3:8b"] = False  # skip capability lookup
             result = client._complete_ollama("test prompt", "system prompt", "llama3:8b")
 
             assert result.content == '{"result": "test"}'

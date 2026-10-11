@@ -201,3 +201,28 @@ def test_parse_json_handles_curly_quotes():
     client = LLMClient(LLMConfig(provider="ollama", model_analysis="m", model_generation="m"))
     resp = LLMResponse(content="{“picks”: [1, 2]}", input_tokens=0, output_tokens=0, model="m")
     assert client.parse_json_response(resp) == {"picks": [1, 2]}
+
+
+def test_thinking_models_get_think_false(mocker):
+    client = LLMClient(LLMConfig(provider="ollama", model_analysis="m", model_generation="m"))
+    http = mocker.patch("backend.llm_client.httpx.Client").return_value.__enter__.return_value
+    http.post.return_value.json.side_effect = [
+        {"capabilities": ["completion", "thinking"]},  # /api/show
+        {"response": '{"picks": [1]}', "prompt_eval_count": 5, "eval_count": 3},
+        {"response": '{"picks": [2]}', "prompt_eval_count": 5, "eval_count": 3},
+    ]
+    client.generate("p", "s", json_mode=True)
+    client.generate("p", "s", json_mode=True)
+    calls = http.post.call_args_list
+    assert calls[0].args[0].endswith("/api/show")
+    assert len(calls) == 3  # capability lookup is cached
+    assert calls[1].kwargs["json"]["think"] is False
+
+
+def test_parse_json_strips_think_block():
+    client = LLMClient(LLMConfig(provider="ollama", model_analysis="m", model_generation="m"))
+    resp = LLMResponse(
+        content='<think>pick jazz ones {"x": 1}</think>\n{"picks": [4]}',
+        input_tokens=0, output_tokens=0, model="m",
+    )
+    assert client.parse_json_response(resp) == {"picks": [4]}

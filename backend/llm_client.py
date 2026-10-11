@@ -117,6 +117,7 @@ class LLMClient:
         self.config = config
         self.provider = config.provider
         self._client: Any = None
+        self._ollama_thinking: dict[str, bool] = {}  # model -> supports thinking
 
         if config.provider == "anthropic":
             self._client = anthropic.Anthropic(api_key=config.api_key)
@@ -329,6 +330,10 @@ class LLMClient:
         }
         if json_mode:
             payload["format"] = "json"
+        if self._ollama_supports_thinking(model):
+            # Reasoning models would spend the small num_predict budget of a
+            # batch call on hidden thinking and never emit the JSON answer.
+            payload["think"] = False
 
         with httpx.Client(timeout=timeout) as client:
             response = client.post(f"{ollama_url}/api/generate", json=payload)
@@ -367,6 +372,25 @@ class LLMClient:
             model=model,
             truncated=truncated,
         )
+
+    def _ollama_supports_thinking(self, model: str) -> bool:
+        """Whether an Ollama model reports the 'thinking' capability (cached)."""
+        if model not in self._ollama_thinking:
+            supports = False
+            try:
+                with httpx.Client(timeout=10.0) as client:
+                    resp = client.post(
+                        f"{self.config.ollama_url.rstrip('/')}/api/show", json={"name": model}
+                    )
+                    resp.raise_for_status()
+                    capabilities = resp.json().get("capabilities") or []
+                    supports = isinstance(capabilities, list) and "thinking" in capabilities
+            except Exception as e:
+                logger.debug("Could not read capabilities for %s: %s", model, e)
+            self._ollama_thinking[model] = supports
+            if supports:
+                logger.info("Ollama model %s supports thinking; disabling it for requests", model)
+        return self._ollama_thinking[model]
 
     def _complete(
         self,
@@ -506,6 +530,11 @@ class LLMClient:
             ValueError: If JSON cannot be parsed
         """
         content = response.content.strip()
+        # Reasoning models (custom endpoints, or Ollama with thinking left on)
+        # may prefix the answer with <think>...</think>; drop it.
+        content = re.sub(r"<think>.*?</think>", "", content, flags=re.DOTALL).strip()
+        if content.startswith("<think>"):
+            content = content.split("</think>")[-1].strip() if "</think>" in content else ""
 
         # Check for empty response first
         if not content:
