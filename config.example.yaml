@@ -10,6 +10,9 @@ plex:
   token: ""
   # Name of your music library section in Plex
   music_library: "Music"
+  # Re-sync the library cache in the background when it is older than this
+  # many hours, while the app is running (0 = off). (env: LIBRARY_AUTO_SYNC_HOURS)
+  auto_sync_hours: 24
 
 llm:
   # LLM provider: "anthropic", "openai", "gemini", "ollama", or "custom"

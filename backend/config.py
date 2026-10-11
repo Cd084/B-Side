@@ -73,7 +73,7 @@ def load_yaml_config(config_path: Path | None = None) -> dict[str, Any]:
     if not config_path.exists():
         return {}
 
-    with open(config_path) as f:
+    with open(config_path, encoding="utf-8") as f:
         return yaml.safe_load(f) or {}
 
 
@@ -81,7 +81,7 @@ def load_user_yaml_config() -> dict[str, Any]:
     """Load user configuration from config.user.yaml."""
     if not USER_CONFIG_PATH.exists():
         return {}
-    with open(USER_CONFIG_PATH) as f:
+    with open(USER_CONFIG_PATH, encoding="utf-8") as f:
         return yaml.safe_load(f) or {}
 
 
@@ -103,7 +103,7 @@ def save_user_config(updates: dict[str, Any]) -> None:
     cleaned = remove_empty_values(merged)
 
     try:
-        with open(USER_CONFIG_PATH, "w") as f:
+        with open(USER_CONFIG_PATH, "w", encoding="utf-8") as f:
             yaml.dump(cleaned, f, default_flow_style=False)
     except PermissionError:
         raise ConfigSaveError(
@@ -195,6 +195,9 @@ def load_config(config_path: Path | None = None) -> AppConfig:
         music_library=get_env_or_yaml(
             "PLEX_MUSIC_LIBRARY", plex_yaml.get("music_library"), "Music"
         ),
+        auto_sync_hours=int(get_env_or_yaml(
+            "LIBRARY_AUTO_SYNC_HOURS", plex_yaml.get("auto_sync_hours"), 24
+        )),
     )
 
     # Get local provider settings

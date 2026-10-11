@@ -91,6 +91,37 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
+# Auto-sync: first check shortly after startup, then periodically
+AUTO_SYNC_FIRST_CHECK_SECONDS = 60
+AUTO_SYNC_CHECK_INTERVAL_SECONDS = 15 * 60
+
+
+async def _auto_sync_loop() -> None:
+    """Re-sync the library cache in the background when it gets old.
+
+    Only refreshes an existing cache; the first sync is driven by setup.
+    Syncs build a staging copy, so playlists keep working while it runs.
+    """
+    await asyncio.sleep(AUTO_SYNC_FIRST_CHECK_SECONDS)
+    while True:
+        try:
+            hours = get_config().plex.auto_sync_hours
+            plex_client = get_plex_client()
+            if (
+                hours > 0
+                and plex_client
+                and plex_client.is_connected()
+                and library_cache.has_cached_tracks()
+                and not library_cache.get_sync_progress()["is_syncing"]
+                and library_cache.is_cache_stale(max_age_hours=hours)
+            ):
+                logger.info("Library cache older than %d hours, starting automatic sync", hours)
+                await asyncio.to_thread(library_cache.sync_library, plex_client)
+        except Exception:
+            logger.exception("Automatic library sync check failed")
+        await asyncio.sleep(AUTO_SYNC_CHECK_INTERVAL_SECONDS)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Initialize clients on startup."""
@@ -125,7 +156,11 @@ async def lifespan(app: FastAPI):
 
         asyncio.create_task(_run_resync())
 
+    auto_sync_task = asyncio.create_task(_auto_sync_loop())
+
     yield
+
+    auto_sync_task.cancel()
 
     # Shutdown: clean up resources
     if _music_research_client is not None:
@@ -442,6 +477,7 @@ async def update_configuration(request: UpdateConfigRequest) -> ConfigResponse:
     if not updates:
         raise HTTPException(status_code=400, detail="No configuration values provided")
 
+    previous_library = get_config().plex.music_library
     try:
         config = update_config_values(updates)
     except ConfigSaveError as e:
@@ -454,6 +490,20 @@ async def update_configuration(request: UpdateConfigRequest) -> ConfigResponse:
             config.plex.token,
             config.plex.music_library,
         )
+        # The cache holds the previous library's tracks; re-sync from the new one
+        plex_client = get_plex_client()
+        if (
+            config.plex.music_library != previous_library
+            and plex_client
+            and plex_client.is_connected()
+            and library_cache.has_cached_tracks()
+            and not library_cache.get_sync_progress()["is_syncing"]
+        ):
+            logger.info(
+                "Music library changed from %r to %r, re-syncing cache",
+                previous_library, config.plex.music_library,
+            )
+            asyncio.create_task(asyncio.to_thread(library_cache.sync_library, plex_client))
 
     if any(k in updates for k in ["llm_provider", "llm_api_key", "model_analysis", "model_generation", "ollama_url", "custom_url"]):
         init_llm_client(config.llm)
@@ -530,6 +580,8 @@ async def get_library_status() -> LibraryCacheStatusResponse:
         error=state["error"],
         plex_connected=plex_client.is_connected() if plex_client else False,
         needs_resync=library_cache.needs_resync(),
+        auto_sync_hours=get_config().plex.auto_sync_hours,
+        music_library=get_config().plex.music_library,
     )
 
 
@@ -1680,7 +1732,7 @@ async def serve_index():
     """Serve the main index.html page with cache-busted asset URLs."""
     index_path = frontend_path / "index.html"
     if index_path.exists():
-        html = index_path.read_text()
+        html = index_path.read_text(encoding="utf-8")
         v = get_version()
         html = html.replace("/static/style.css", f"/static/style.css?v={v}")
         html = html.replace("/static/app.js", f"/static/app.js?v={v}")

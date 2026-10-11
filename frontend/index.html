@@ -82,7 +82,8 @@
                                 </div>
                                 <div class="form-group">
                                     <label for="setup-plex-library">Music Library</label>
-                                    <input type="text" id="setup-plex-library" value="Music" placeholder="Music library name">
+                                    <input type="text" id="setup-plex-library" value="Music" placeholder="Music library name" list="plex-library-options">
+                                    <p class="setup-field-hint">The name of the one Plex library to build playlists from (exactly as shown in Plex). Other libraries, e.g. audiobooks, are not used.</p>
                                 </div>
                                 <div id="setup-plex-error" class="setup-inline-error hidden" role="alert"></div>
                                 <button id="setup-plex-btn" class="btn btn-primary">Connect</button>
@@ -186,6 +187,13 @@
                 </div>
 
                 <div class="home-content home-content--loading">
+                    <div id="library-stale-banner" class="library-stale-banner hidden" role="status">
+                        <div class="library-stale-text">
+                            <strong>Your library may be out of date.</strong>
+                            <span id="library-stale-detail"></span>
+                        </div>
+                        <button id="library-stale-sync" class="btn btn-secondary library-stale-btn">Sync now</button>
+                    </div>
                     <h2 class="home-greeting">What do you want to listen to?</h2>
                     <p class="home-subtitle">Create playlists and discover albums from your library.</p>
                     <div class="home-cards">
@@ -661,7 +669,9 @@
                     </div>
                     <div class="form-group">
                         <label for="music-library">Music Library</label>
-                        <input type="text" id="music-library" value="Music" placeholder="Music library name">
+                        <input type="text" id="music-library" value="Music" placeholder="Music library name" list="plex-library-options">
+                        <datalist id="plex-library-options"></datalist>
+                        <p id="music-library-hint" class="setup-field-hint">Only this library is used. Changing it re-syncs automatically.</p>
                     </div>
                 </section>
 
@@ -909,7 +919,7 @@
                     <span id="footer-track-separator" class="footer-separator">·</span>
                     <span id="footer-sync-time">--</span>
                     <span class="footer-separator">·</span>
-                    <a href="#" id="footer-refresh-link" class="footer-refresh">Refresh</a>
+                    <a href="#" id="footer-refresh-link" class="footer-refresh" title="Re-read your Plex library to pick up new or removed music">Sync now</a>
                 </span>
                 <span class="cost-display footer-results-only" id="cost-display"></span>
             </div>

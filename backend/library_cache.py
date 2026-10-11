@@ -404,6 +404,10 @@ def check_server_changed(current_server_id: str) -> bool:
     return cached_server_id != current_server_id
 
 
+# Tracks are synced into this table, then swapped into `tracks`
+STAGING_TABLE = "tracks_sync_staging"
+
+
 def sync_library(
     plex_client: Any,
     on_progress: Callable[[int, int], None] | None = None,
@@ -451,10 +455,14 @@ def sync_library(
 
         conn = ensure_db_initialized()
 
-        # Clear existing tracks and reset sync state to avoid stale "cache available"
-        # signal if sync fails partway through
-        conn.execute("DELETE FROM tracks")
-        conn.execute("UPDATE sync_state SET track_count = 0 WHERE id = 1")
+        # Build the new snapshot in a staging table (same schema as tracks) and
+        # swap it in at the end. The existing cache stays readable during the
+        # sync and survives a failed one.
+        conn.execute(f"DROP TABLE IF EXISTS {STAGING_TABLE}")
+        tracks_sql = conn.execute(
+            "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'tracks'"
+        ).fetchone()[0]
+        conn.execute(tracks_sql.replace("tracks", STAGING_TABLE, 1))
         conn.commit()
 
         # Phase 1: Fetch albums for genre/year mapping
@@ -513,7 +521,7 @@ def sync_library(
             # Insert and update progress every SYNC_BATCH_SIZE tracks
             if len(batch_data) >= SYNC_BATCH_SIZE:
                 conn.executemany(
-                    "INSERT OR REPLACE INTO tracks "
+                    f"INSERT OR REPLACE INTO {STAGING_TABLE} "
                     "(rating_key, title, artist, album, duration_ms, year, genres, "
                     "user_rating, is_live, parent_rating_key, view_count, last_viewed_at) "
                     "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
@@ -536,7 +544,7 @@ def sync_library(
         # Insert remaining tracks
         if batch_data:
             conn.executemany(
-                "INSERT OR REPLACE INTO tracks "
+                f"INSERT OR REPLACE INTO {STAGING_TABLE} "
                 "(rating_key, title, artist, album, duration_ms, year, genres, "
                 "user_rating, is_live, parent_rating_key, view_count, last_viewed_at) "
                 "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
@@ -553,11 +561,16 @@ def sync_library(
         duration_ms = int((time.time() - start_time) * 1000)
         synced_at = datetime.now(timezone.utc).isoformat()
 
+        # Swap the new snapshot in with the sync state in one transaction
+        conn.execute("DELETE FROM tracks")
+        conn.execute(f"INSERT INTO tracks SELECT * FROM {STAGING_TABLE}")
         conn.execute(
             "UPDATE sync_state SET plex_server_id = ?, last_sync_at = ?, "
             "track_count = ?, sync_duration_ms = ? WHERE id = 1",
             (server_id, synced_at, synced_count, duration_ms),
         )
+        conn.commit()
+        conn.execute(f"DROP TABLE IF EXISTS {STAGING_TABLE}")
         conn.commit()
 
         logger.info("Sync complete: %d tracks in %dms", synced_count, duration_ms)
@@ -576,6 +589,13 @@ def sync_library(
         logger.exception("Sync failed: %s", e)
         with _sync_lock:
             _sync_state["error"] = str(e)
+        if conn:
+            try:
+                conn.rollback()
+                conn.execute(f"DROP TABLE IF EXISTS {STAGING_TABLE}")
+                conn.commit()
+            except Exception:
+                logger.warning("Could not drop sync staging table", exc_info=True)
         return {"success": False, "error": str(e)}
 
     finally:

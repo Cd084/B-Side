@@ -3472,6 +3472,34 @@ body.no-scroll {
 }
 
 /* Warning banner (data dir not writable) */
+.library-stale-banner {
+    display: flex;
+    gap: var(--spacing-md);
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    background: rgba(229, 160, 13, 0.1);
+    border: 1px solid var(--accent);
+    border-radius: var(--radius-lg);
+    padding: var(--spacing-md);
+    margin-bottom: var(--spacing-lg);
+    color: var(--text-primary);
+    text-align: left;
+}
+
+.library-stale-banner.hidden {
+    display: none;
+}
+
+.library-stale-text {
+    flex: 1 1 18rem;
+    line-height: 1.4;
+}
+
+.library-stale-btn {
+    flex-shrink: 0;
+}
+
 .setup-warning {
     background: rgba(233, 92, 89, 0.1);
     border: 1px solid var(--error);

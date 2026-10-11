@@ -606,8 +606,8 @@ class TestSyncLibrary:
         assert tracks_after[0]["rating_key"] == "new-1"
         assert not any(t["rating_key"] == "stale-track-999" for t in tracks_after)
 
-    def test_failed_sync_resets_cache_state(self, initialized_db, mock_track, reset_sync_state):
-        """Failed sync resets track_count so has_cached_tracks() returns False."""
+    def test_failed_sync_keeps_previous_snapshot(self, initialized_db, mock_track, reset_sync_state):
+        """A failed re-sync keeps the last good snapshot (syncs build a staging copy)."""
         # First, do a successful sync to populate cache
         class SuccessfulClient:
             def get_machine_identifier(self):
@@ -637,6 +637,16 @@ class TestSyncLibrary:
         result = library_cache.sync_library(FailingClient())
         assert result["success"] is False
 
-        # Cache should now report as empty to avoid using stale data
-        assert library_cache.has_cached_tracks() is False
-        assert library_cache.get_sync_state()["track_count"] == 0
+        # Previous snapshot is still usable; the error is reported
+        assert library_cache.has_cached_tracks() is True
+        assert library_cache.get_sync_state()["track_count"] == 1
+        assert len(library_cache.get_cached_tracks()) == 1
+        assert "Plex unreachable" in library_cache.get_sync_progress()["error"]
+        conn = library_cache.get_db_connection()
+        try:
+            leftover = conn.execute(
+                "SELECT name FROM sqlite_master WHERE name = ?", (library_cache.STAGING_TABLE,)
+            ).fetchone()
+        finally:
+            conn.close()
+        assert leftover is None

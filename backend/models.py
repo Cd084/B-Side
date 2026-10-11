@@ -95,6 +95,9 @@ class PlexConfig(BaseModel):
     url: str
     token: str
     music_library: str = "Music"
+    # Re-sync the library cache in the background when it is older than this
+    # many hours (0 = never; sync manually from the footer)
+    auto_sync_hours: int = 24
 
 
 class LLMConfig(BaseModel):
@@ -528,6 +531,8 @@ class LibraryCacheStatusResponse(BaseModel):
     error: str | None = None
     plex_connected: bool
     needs_resync: bool = False
+    auto_sync_hours: int = 0  # 0 = automatic sync disabled
+    music_library: str = ""  # Plex library the cache is synced from
 
 
 class SyncTriggerResponse(BaseModel):

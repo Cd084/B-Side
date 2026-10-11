@@ -1732,6 +1732,8 @@ function updateSettings() {
         ? '••••••••••••••••  (configured)'
         : 'Your API key';
 
+    updateMusicLibraryHint();
+
     // Update Ollama settings
     const ollamaUrl = document.getElementById('ollama-url');
     ollamaUrl.value = state.config.ollama_url || 'http://localhost:11434';
@@ -2330,8 +2332,33 @@ function updateFooterLibraryStatus(status) {
             syncTime.textContent = 'Syncing...';
         }
     } else {
-        syncTime.textContent = formatRelativeTime(status.synced_at);
+        syncTime.textContent = `synced ${formatRelativeTime(status.synced_at)}`;
+        const auto = status.auto_sync_hours > 0
+            ? `Syncs automatically every ${status.auto_sync_hours} hours while MediaSage is running.`
+            : 'Automatic sync is off.';
+        const library = status.music_library ? `Plex library: "${status.music_library}". ` : '';
+        syncTime.title = `${library}Last synced ${new Date(status.synced_at).toLocaleString()}. ${auto}`;
     }
+    updateStaleLibraryBanner(status);
+}
+
+// Show the banner when the cache is older than this (auto-sync normally keeps it fresh)
+const STALE_LIBRARY_DAYS = 7;
+
+function updateStaleLibraryBanner(status) {
+    const banner = document.getElementById('library-stale-banner');
+    if (!banner) return;
+    const syncedAt = status?.synced_at ? new Date(status.synced_at) : null;
+    const ageDays = syncedAt ? (Date.now() - syncedAt.getTime()) / 86400000 : 0;
+    const stale = syncedAt && !status.is_syncing && status.track_count > 0 && ageDays >= STALE_LIBRARY_DAYS;
+    banner.classList.toggle('hidden', !stale);
+    if (!stale) return;
+    const days = Math.floor(ageDays);
+    const auto = status.auto_sync_hours > 0
+        ? ' Automatic sync only runs while MediaSage is open.'
+        : ' Automatic sync is turned off.';
+    document.getElementById('library-stale-detail').textContent =
+        ` Last synced ${syncedAt.toLocaleDateString()} (${days} days ago). Music added to Plex since then won't be used in playlists until you sync.${auto}`;
 }
 
 async function checkLibraryStatus() {
@@ -2729,6 +2756,12 @@ function setupEventListeners() {
     // Provider selection change
     document.getElementById('llm-provider').addEventListener('change', (e) => {
         showProviderSettings(e.target.value);
+    });
+
+    // Stale-library banner
+    document.getElementById('library-stale-sync')?.addEventListener('click', () => {
+        document.getElementById('library-stale-banner').classList.add('hidden');
+        handleRefreshLibrary();
     });
 
     // Library refresh link
@@ -5101,6 +5134,43 @@ function exitSetupWizard() {
     renderHistoryFeed();
 }
 
+// "using "Music" (also on server, not used: Audio Books)"
+function describeLibraries(libraries, used) {
+    const others = (libraries || []).filter(name => name !== used);
+    const missing = libraries && libraries.length && !libraries.includes(used);
+    let text = `using the "${used}" library`;
+    if (missing) text += ` (not found on server! Found: ${libraries.join(', ')})`;
+    else if (others.length) text += ` (also on server, not used: ${others.join(', ')})`;
+    return text;
+}
+
+function fillLibraryOptions(libraries) {
+    const list = document.getElementById('plex-library-options');
+    if (!list) return;
+    list.innerHTML = '';
+    for (const name of libraries || []) {
+        const option = document.createElement('option');
+        option.value = name;
+        list.appendChild(option);
+    }
+}
+
+async function updateMusicLibraryHint() {
+    const hint = document.getElementById('music-library-hint');
+    if (!hint) return;
+    try {
+        const status = await fetchSetupStatus();
+        const libraries = status.music_libraries || [];
+        fillLibraryOptions(libraries);
+        const used = state.config?.music_library || 'Music';
+        if (libraries.length) {
+            hint.textContent = `Currently ${describeLibraries(libraries, used)}. Changing it re-syncs automatically.`;
+        }
+    } catch (e) {
+        // Keep the default hint if status is unavailable
+    }
+}
+
 function renderSetupState(status) {
     // Data dir warning
     const dataWarning = document.getElementById('setup-data-warning');
@@ -5114,7 +5184,9 @@ function renderSetupState(status) {
 
     // Step 1: Plex
     if (status.plex_connected) {
-        setStepDone('plex', `Connected to Plex (${status.music_libraries.length} music ${status.music_libraries.length === 1 ? 'library' : 'libraries'})`);
+        const used = document.getElementById('setup-plex-library')?.value.trim() || 'Music';
+        setStepDone('plex', `Connected to Plex \u2014 ${describeLibraries(status.music_libraries, used)}`);
+        fillLibraryOptions(status.music_libraries);
     } else {
         setStepForm('plex');
         if (status.plex_from_env) {
