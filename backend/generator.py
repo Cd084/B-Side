@@ -174,10 +174,12 @@ def generate_playlist_stream(
     min_rating: int = 0,
     max_tracks_to_ai: int = 500,
     exclude_seasonal: bool = True,
+    owner: str | None = None,
 ) -> Generator[str, None, None]:
     """Generate a playlist with streaming progress updates.
 
     Yields SSE-formatted events with progress updates and final result.
+    owner is the signed-in Plex user the saved result belongs to.
     """
     def emit(event: str, data: dict) -> str:
         return f"event: {event}\ndata: {json.dumps(data)}\n\n"
@@ -383,6 +385,7 @@ def generate_playlist_stream(
                 track_count=len(matched_tracks),
                 art_rating_key=first_art_key,
                 subtitle=result_subtitle,
+                owner=owner,
             )
         except Exception as e:
             logger.warning("Failed to save result: %s", e)

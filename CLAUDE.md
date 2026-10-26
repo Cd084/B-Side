@@ -94,7 +94,7 @@ CUSTOM_CONTEXT_WINDOW=4096
 
 - **Filter-first**: Apply genre/decade filters before sending to LLM (handles 50k+ track libraries)
 - **No database**: Library data fetched from Plex on demand; config in YAML
-- **No auth**: Rely on network security (home LAN, VPN, reverse proxy)
+- **Plex sign-in**: see "Plex sign-in (multi-user fork)" below
 - **Album art proxy**: Backend proxies art to avoid exposing Plex token to browser
 - **Two-model strategy**: Smart model for analysis, cheap model for generation
 - **Fuzzy track matching**: Use rapidfuzz (threshold ~60) to match LLM responses to library
@@ -141,6 +141,18 @@ Option: `smart_generation: true` uses analysis model for both (higher quality, ~
   not the model's advertised maximum.
 - Plex playlist writes go through `PlexClient._fetch_tracks` /
   `_add_items_chunked` (`PLAYLIST_CHUNK_SIZE` = 200).
+
+## Plex sign-in (multi-user fork)
+
+- `backend/auth.py`: once Plex is configured, everyone signs in with their own Plex account
+  (plex.tv PIN flow); only accounts with access to the server get in, and the server owner is
+  the admin. Settings/setup/sync are admin-only via `AuthMiddleware` (pure ASGI) in main.py.
+- Each session acts with that user's server token for playlists, clients and play queues
+  (`_user_plex_client`); history is per-user (`results.owner`, captured explicitly where
+  generation runs in worker threads). Plex Home profiles are picked after sign-in
+  (`plex_home.py`). Library cache, sync and LLMs stay shared on `PLEX_TOKEN`.
+- Sessions: `data/sessions.db`, cookie `bside_session` (stored as SHA-256 hash).
+- `DISABLE_AUTH=true` turns sign-in off; tests run with it off (conftest autouse fixture).
 <!-- MANUAL ADDITIONS END -->
 
 ## Recent Changes

@@ -362,6 +362,21 @@ sudo systemctl start mediasage
 | `CUSTOM_LLM_URL` | No | Custom OpenAI-compatible API base URL |
 | `CUSTOM_LLM_API_KEY` | No | API key for custom provider (if required) |
 | `CUSTOM_CONTEXT_WINDOW` | No | Context window size for custom provider (default: 32768) |
+| `DISABLE_AUTH` | No | `true` turns off Plex sign-in, so anyone who can reach B-Side uses it as `PLEX_TOKEN`'s account. For emergencies, e.g. if you're locked out. |
+
+### Signing in (multiple users)
+
+Once Plex is set up, **everyone signs in with their own Plex account** before using B-Side. That includes Plex Home members and friends you share your server with.
+
+- **How it works:** the button opens Plex's own sign-in page, so B-Side never sees passwords. Only accounts with **access to your Plex server** can sign in; anyone else is refused.
+- **Each person's own Plex:** a signed-in person's playlists are **saved to their own Plex account**. They see their own playlists, their own devices for "Play now", and their own history in B-Side.
+- **Plex Home profiles:** members get a **"Who's listening?"** picker (with the profile's PIN if it has one), like the Plex apps. Managed profiles without their own Plex login can be used this way.
+- **The server owner is the admin.** Only the owner sees **Settings** (Plex connection, AI models, library sync). Everyone else just makes playlists and album picks.
+- **Shared background work:** the library cache and AI models are shared and run as `PLEX_TOKEN`, which must be the server owner's token.
+  - Candidate tracks therefore come from the owner's view of the library. A restricted user may occasionally be offered a track they can't play; it's skipped when saving to their Plex.
+  - Rating and familiarity filters use the owner's ratings and play counts.
+- **Sessions** last 30 days of inactivity and survive restarts (`data/sessions.db`). Use the menu under your name to switch profile or sign out.
+- If B-Side is reachable from outside your network, put it behind **HTTPS** (e.g. a reverse proxy) so sign-in cookies are protected in transit. B-Side marks cookies secure when it sees HTTPS.
 
 ### Web UI Configuration
 

@@ -232,6 +232,11 @@ async function apiCall(endpoint, options = {}) {
         ...options,
     });
 
+    if (response.status === 401 && !endpoint.startsWith('/auth/')) {
+        // Signed out (or the session expired): back to the sign-in screen.
+        showSignIn();
+    }
+
     if (!response.ok) {
         const error = await response.json().catch(() => ({ detail: 'Unknown error' }));
         const detail = Array.isArray(error.detail) ? error.detail.map(e => e.msg).join('; ') : error.detail;
@@ -243,6 +248,238 @@ async function apiCall(endpoint, options = {}) {
 
 async function fetchConfig() {
     return apiCall('/config');
+}
+
+// =============================================================================
+// Plex Sign-in
+// =============================================================================
+// Everyone signs in with their own Plex account; B-Side acts as them for
+// playlists, devices and history. The server owner is the admin (Settings).
+
+/** Returns true if the app may load (signed in, or sign-in not required). */
+async function ensureSignedIn() {
+    let me;
+    try {
+        me = await apiCall('/auth/me');
+    } catch (e) {
+        console.warn('Sign-in status check failed:', e);
+        return true; // older server or offline: let the app report its own errors
+    }
+    state.auth = me;
+    if (me.auth_required && !me.signed_in && new URLSearchParams(location.search).has('signin')) {
+        // Back from signing in on Plex in this tab: finish signing in.
+        history.replaceState(null, '', location.pathname + location.hash);
+        for (let i = 0; i < 5 && !me.signed_in; i++) {
+            try {
+                me = await apiCall('/auth/plex/check', { method: 'POST' });
+            } catch (e) {
+                break;
+            }
+            if (!me.signed_in) await new Promise(r => setTimeout(r, 1500));
+        }
+        state.auth = me;
+        if (me.user?.can_switch_profile) sessionStorage.setItem('bside-pick-profile', '1');
+    }
+    if (me.auth_required && !me.signed_in) {
+        showSignIn();
+        return false;
+    }
+    applySignedInUser(me.user);
+    if (me.user?.can_switch_profile && sessionStorage.getItem('bside-pick-profile')) {
+        sessionStorage.removeItem('bside-pick-profile');
+        openProfilePicker();
+    }
+    return true;
+}
+
+function showSignIn() {
+    document.getElementById('app-loading')?.remove();
+    document.querySelector('.app')?.classList.add('hidden');
+    document.getElementById('signin-screen').classList.remove('hidden');
+    document.getElementById('signin-btn').focus();
+}
+
+function applySignedInUser(user) {
+    document.body.classList.toggle('not-admin', !!user && !user.is_admin);
+    const menu = document.getElementById('user-menu');
+    if (!user) {
+        menu.classList.add('hidden');
+        return;
+    }
+    menu.classList.remove('hidden');
+    document.getElementById('user-name').textContent = user.title;
+    document.getElementById('user-avatar').innerHTML = escapeHtml(user.title.charAt(0).toUpperCase()) + (user.thumb
+        ? `<img src="${escapeHtml(user.thumb)}" alt="" referrerpolicy="no-referrer" onerror="this.remove()">`
+        : '');
+    document.getElementById('switch-profile-btn').classList.toggle('hidden', !user.can_switch_profile);
+}
+
+async function startPlexSignIn() {
+    const statusEl = document.getElementById('signin-status');
+    const btn = document.getElementById('signin-btn');
+    const say = (text, isError = false) => {
+        statusEl.textContent = text;
+        statusEl.classList.remove('hidden');
+        statusEl.classList.toggle('signin-status--error', isError);
+    };
+    // Open the popup straight away (in the click) so browsers don't block it.
+    const popup = window.open('', 'plex-signin', 'width=600,height=750');
+    btn.disabled = true;
+    say('Waiting for Plex sign-in…');
+    try {
+        // In the popup, Plex returns to a page that closes itself; if the popup
+        // was blocked, sign in in this tab and Plex returns to B-Side (?signin=1).
+        const forward = popup ? `${location.origin}/static/signin-done.html` : `${location.origin}/?signin=1`;
+        const { auth_url } = await apiCall('/auth/plex/start', {
+            method: 'POST',
+            body: JSON.stringify({ forward_url: forward }),
+        });
+        if (!popup) {
+            location.href = auth_url;
+            return;
+        }
+        popup.location = auth_url;
+        const deadline = Date.now() + 10 * 60 * 1000;
+        while (Date.now() < deadline) {
+            await new Promise(r => setTimeout(r, 2000));
+            const result = await apiCall('/auth/plex/check', { method: 'POST' });
+            if (result.signed_in) {
+                popup.close();
+                if (result.user?.can_switch_profile) sessionStorage.setItem('bside-pick-profile', '1');
+                location.reload();
+                return;
+            }
+            if (popup.closed) {
+                // The window closed itself after sign-in; check once more, then stop.
+                const last = await apiCall('/auth/plex/check', { method: 'POST' });
+                if (last.signed_in) {
+                    if (last.user?.can_switch_profile) sessionStorage.setItem('bside-pick-profile', '1');
+                    location.reload();
+                    return;
+                }
+                throw new Error('Sign-in window was closed before signing in.');
+            }
+        }
+        throw new Error('Sign-in timed out. Please try again.');
+    } catch (error) {
+        popup?.close();
+        say(error.message, true);
+        btn.disabled = false;
+    }
+}
+
+async function signOut() {
+    try {
+        await apiCall('/auth/logout', { method: 'POST' });
+    } finally {
+        location.reload();
+    }
+}
+
+function toggleUserMenu(open) {
+    const items = document.getElementById('user-menu-items');
+    const chip = document.getElementById('user-chip');
+    const show = open ?? items.classList.contains('hidden');
+    items.classList.toggle('hidden', !show);
+    chip.setAttribute('aria-expanded', String(show));
+}
+
+// ---- Plex Home profiles ("Who's listening?") ----
+
+let homeProfiles = [];
+let profilePending = null; // profile waiting for a PIN
+
+async function openProfilePicker() {
+    const modal = document.getElementById('profile-modal');
+    const listEl = document.getElementById('profile-list');
+    showProfileList();
+    listEl.innerHTML = '<div class="client-loading"><div class="spinner"></div><p>Loading profiles...</p></div>';
+    modal.classList.remove('hidden');
+    lockScroll();
+    focusManager.openModal(modal);
+
+    try {
+        homeProfiles = await apiCall('/auth/profiles');
+        listEl.innerHTML = homeProfiles.map(p => {
+            const tags = [p.admin ? 'Owner' : '', p.restricted ? 'Restricted' : '', p.protected ? 'PIN' : '']
+                .filter(Boolean).join(' · ');
+            // The initial shows if the Plex avatar is missing or fails to load.
+            const avatar = `<div class="profile-avatar">${escapeHtml(p.title.charAt(0).toUpperCase())}${
+                p.thumb ? `<img src="${escapeHtml(p.thumb)}" alt="" referrerpolicy="no-referrer" onerror="this.remove()">` : ''}</div>`;
+            return `
+            <div class="client-item${p.current ? ' profile-current' : ''}" data-uuid="${escapeHtml(p.uuid)}"
+                 role="option" tabindex="0" aria-selected="${p.current}"
+                 aria-label="${escapeHtml(p.title)}${p.current ? ' (current)' : ''}">
+                ${avatar}
+                <div class="client-info">
+                    <div class="client-name">${escapeHtml(p.title)}${p.current ? ' ✓' : ''}</div>
+                    ${tags ? `<div class="client-status-text">${tags}</div>` : ''}
+                </div>
+            </div>`;
+        }).join('') || '<p class="client-empty-state">No other profiles in this Plex Home.</p>';
+
+        listEl.querySelectorAll('.client-item').forEach(item => {
+            item.addEventListener('click', () => handleProfileSelect(item.dataset.uuid));
+            item.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault();
+                    handleProfileSelect(item.dataset.uuid);
+                }
+            });
+        });
+    } catch (error) {
+        listEl.innerHTML = `<p class="client-empty-state">${escapeHtml(error.message)}</p>`;
+    }
+}
+
+function dismissProfilePicker() { dismissModal('profile-modal'); }
+
+function showProfileList() {
+    profilePending = null;
+    document.getElementById('profile-list').classList.remove('hidden');
+    document.getElementById('profile-pin-form').classList.add('hidden');
+}
+
+function handleProfileSelect(uuid) {
+    const profile = homeProfiles.find(p => p.uuid === uuid);
+    if (!profile) return;
+    if (profile.current) {
+        dismissProfilePicker();
+        return;
+    }
+    if (!profile.protected) {
+        switchProfile(profile, null);
+        return;
+    }
+    profilePending = profile;
+    document.getElementById('profile-list').classList.add('hidden');
+    document.getElementById('profile-pin-form').classList.remove('hidden');
+    document.getElementById('profile-pin-name').textContent = profile.title;
+    document.getElementById('profile-pin-error').classList.add('hidden');
+    const pin = document.getElementById('profile-pin');
+    pin.value = '';
+    pin.focus();
+}
+
+async function switchProfile(profile, pin) {
+    setLoading(true, `Switching to ${profile.title}...`);
+    try {
+        await apiCall('/auth/profile', {
+            method: 'POST',
+            body: JSON.stringify({ uuid: profile.uuid, pin }),
+        });
+        location.reload(); // reload everything (playlists, history) as the new profile
+    } catch (error) {
+        setLoading(false);
+        if (pin !== null) {
+            const pinError = document.getElementById('profile-pin-error');
+            pinError.textContent = error.message;
+            pinError.classList.remove('hidden');
+            document.getElementById('profile-pin').select();
+        } else {
+            showError(error.message);
+        }
+    }
 }
 
 async function updateConfig(updates) {
@@ -976,6 +1213,12 @@ function setupHistoryEventListeners() {
 }
 
 function updateView() {
+    // Only the server owner (admin) can open Settings.
+    if (state.view === 'settings' && state.auth?.user && !state.auth.user.is_admin) {
+        state.view = 'home';
+        history.replaceState(null, '', '#home');
+    }
+
     // Update views
     document.querySelectorAll('.view').forEach(view => {
         view.classList.toggle('active', view.id === `${state.view}-view`);
@@ -2752,6 +2995,21 @@ function setupEventListeners() {
 
     // Save settings
     document.getElementById('save-settings-btn').addEventListener('click', handleSaveSettings);
+    document.getElementById('signin-btn').addEventListener('click', startPlexSignIn);
+    document.getElementById('user-chip').addEventListener('click', (e) => {
+        e.stopPropagation();
+        toggleUserMenu();
+    });
+    document.addEventListener('click', () => toggleUserMenu(false));
+    document.getElementById('switch-profile-btn').addEventListener('click', () => {
+        toggleUserMenu(false);
+        openProfilePicker();
+    });
+    document.getElementById('sign-out-btn').addEventListener('click', signOut);
+    document.getElementById('profile-pin-form').addEventListener('submit', (e) => {
+        e.preventDefault();
+        if (profilePending) switchProfile(profilePending, document.getElementById('profile-pin').value);
+    });
 
     // Success modal - Start New Playlist
     document.getElementById('new-playlist-btn').addEventListener('click', hideSuccessModal);
@@ -2873,6 +3131,7 @@ function setupEventListeners() {
             { id: 'rec-restart-modal', dismiss: dismissRecRestartModal },
             { id: 'play-choice-modal', dismiss: dismissPlayChoice },
             { id: 'client-picker-modal', dismiss: dismissClientPicker },
+            { id: 'profile-modal', dismiss: dismissProfilePicker },
             { id: 'play-success-modal', dismiss: dismissPlaySuccess },
             { id: 'update-success-modal', dismiss: dismissUpdateSuccess },
             { id: 'success-modal', dismiss: dismissSuccessModal },
@@ -5502,6 +5761,9 @@ document.addEventListener('DOMContentLoaded', async () => {
     updateMode();
     updateStep();
     renderPromptPills('playlist-prompt-pills', 'playlist-prompt-shuffle', PLAYLIST_PROMPT_GROUPS);
+
+    // Plex sign-in comes first; the sign-in screen replaces the app until then.
+    if (!(await ensureSignedIn())) return;
 
     // Load initial config
     try {

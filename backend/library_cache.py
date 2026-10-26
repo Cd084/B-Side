@@ -169,6 +169,13 @@ def init_schema(conn: sqlite3.Connection) -> bool:
     except sqlite3.OperationalError:
         pass  # Column already exists
 
+    # Migration: results belong to the signed-in Plex user who made them
+    try:
+        conn.execute("ALTER TABLE results ADD COLUMN owner TEXT")
+        logger.info("Migration applied: added owner column to results")
+    except sqlite3.OperationalError:
+        pass  # Column already exists
+
     # Index on parent_rating_key (must come after migration adds the column)
     conn.execute("CREATE INDEX IF NOT EXISTS idx_tracks_parent_key ON tracks(parent_rating_key)")
 
@@ -931,6 +938,7 @@ def save_result(
     artist: str | None = None,
     art_rating_key: str | None = None,
     subtitle: str | None = None,
+    owner: str | None = None,
 ) -> str:
     """Save a generated result and return its unique ID.
 
@@ -943,6 +951,7 @@ def save_result(
         artist: Primary artist (for album recs)
         art_rating_key: Rating key for thumbnail art
         subtitle: Pre-computed subtitle for history feed cards
+        owner: Plex user uuid of who made it (None when sign-in is off)
 
     Returns:
         16-char hex ID for the saved result
@@ -954,9 +963,9 @@ def save_result(
         for _ in range(10):
             result_id = secrets.token_hex(8)
             cursor = conn.execute(
-                """INSERT OR IGNORE INTO results (id, type, title, prompt, snapshot, track_count, artist, art_rating_key, subtitle)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                (result_id, result_type, title, prompt, json.dumps(snapshot), track_count, artist, art_rating_key, subtitle),
+                """INSERT OR IGNORE INTO results (id, type, title, prompt, snapshot, track_count, artist, art_rating_key, subtitle, owner)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (result_id, result_type, title, prompt, json.dumps(snapshot), track_count, artist, art_rating_key, subtitle, owner),
             )
             if cursor.rowcount > 0:
                 break
@@ -969,17 +978,35 @@ def save_result(
         conn.close()
 
 
-def get_result(result_id: str) -> dict[str, Any] | None:
+def _owner_where(owner: str | None, include_unowned: bool) -> tuple[str, list[Any]]:
+    """SQL condition limiting results to one user's (no limit when owner is None).
+
+    Results saved before sign-in existed have no owner; include_unowned shows
+    them too (used for the admin).
+    """
+    if owner is None:
+        return "1=1", []
+    if include_unowned:
+        return "(owner = ? OR owner IS NULL)", [owner]
+    return "owner = ?", [owner]
+
+
+def get_result(
+    result_id: str, owner: str | None = None, include_unowned: bool = False
+) -> dict[str, Any] | None:
     """Fetch a single result by ID, including its snapshot.
 
     Returns:
-        Dict with all columns (snapshot parsed from JSON), or None if not found.
+        Dict with all columns (snapshot parsed from JSON), or None if not found
+        (or it belongs to someone else).
     """
     conn = ensure_db_initialized()
     try:
+        cond, params = _owner_where(owner, include_unowned)
         row = conn.execute(
-            "SELECT id, type, title, prompt, snapshot, track_count, artist, art_rating_key, subtitle, created_at FROM results WHERE id = ?",
-            (result_id,),
+            "SELECT id, type, title, prompt, snapshot, track_count, artist, art_rating_key, subtitle, created_at "
+            f"FROM results WHERE id = ? AND {cond}",
+            [result_id, *params],
         ).fetchone()
         if not row:
             return None
@@ -1003,6 +1030,8 @@ def list_results(
     result_type: str | None = None,
     limit: int = 20,
     offset: int = 0,
+    owner: str | None = None,
+    include_unowned: bool = False,
 ) -> tuple[list[dict[str, Any]], int]:
     """List results ordered by created_at DESC, without snapshots.
 
@@ -1016,14 +1045,14 @@ def list_results(
     """
     conn = ensure_db_initialized()
     try:
-        where_clause = ""
-        params: list[Any] = []
+        cond, params = _owner_where(owner, include_unowned)
+        where_clause = f"WHERE {cond}"
 
         if result_type:
             types = [t.strip() for t in result_type.split(",") if t.strip()]
             placeholders = ",".join("?" for _ in types)
-            where_clause = f"WHERE type IN ({placeholders})"
-            params = types
+            where_clause += f" AND type IN ({placeholders})"
+            params = params + types
 
         # Get total count
         total = conn.execute(
@@ -1058,15 +1087,16 @@ def list_results(
         conn.close()
 
 
-def delete_result(result_id: str) -> bool:
+def delete_result(result_id: str, owner: str | None = None, include_unowned: bool = False) -> bool:
     """Delete a result by ID.
 
     Returns:
-        True if a row was deleted, False if not found.
+        True if a row was deleted, False if not found (or someone else's).
     """
     conn = ensure_db_initialized()
     try:
-        cursor = conn.execute("DELETE FROM results WHERE id = ?", (result_id,))
+        cond, params = _owner_where(owner, include_unowned)
+        cursor = conn.execute(f"DELETE FROM results WHERE id = ? AND {cond}", [result_id, *params])
         conn.commit()
         deleted = cursor.rowcount > 0
         if deleted:

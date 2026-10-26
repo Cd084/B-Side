@@ -872,3 +872,56 @@ class SetupCompleteResponse(BaseModel):
     """Response from marking setup as complete."""
 
     success: bool
+
+
+# =============================================================================
+# Plex sign-in
+# =============================================================================
+
+
+class AuthUser(BaseModel):
+    """The signed-in Plex user (or the Plex Home profile they picked)."""
+
+    title: str
+    thumb: str | None = None
+    is_admin: bool = False  # the server owner: can change settings
+    can_switch_profile: bool = False  # in a Plex Home, so profiles can be picked
+
+
+class AuthStatusResponse(BaseModel):
+    """Whether sign-in is required, and who is signed in."""
+
+    auth_required: bool
+    signed_in: bool
+    user: AuthUser | None = None
+
+
+class PlexSignInStartRequest(BaseModel):
+    """Where Plex should send the sign-in window back to when done."""
+
+    forward_url: str | None = None
+
+
+class PlexSignInStartResponse(BaseModel):
+    """Plex's sign-in page to open."""
+
+    auth_url: str
+
+
+class PlexProfile(BaseModel):
+    """A Plex Home profile the signed-in account can switch to."""
+
+    uuid: str
+    title: str
+    thumb: str | None = None
+    admin: bool = False
+    protected: bool = False  # needs a PIN
+    restricted: bool = False
+    current: bool = False
+
+
+class SwitchProfileRequest(BaseModel):
+    """Switch to a Plex Home profile; pin only for protected profiles."""
+
+    uuid: str
+    pin: str | None = Field(default=None, pattern=r"^\d{4}$")

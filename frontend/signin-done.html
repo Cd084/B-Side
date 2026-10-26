@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>B-Side — signed in</title>
+    <style>
+        body { background: #1a1a1a; color: #fff; font-family: system-ui, sans-serif;
+               display: flex; align-items: center; justify-content: center; height: 100vh; margin: 0; }
+        p { color: #a0a0a0; }
+        strong { color: #e5a00d; }
+    </style>
+</head>
+<body>
+    <div>
+        <p><strong>Signed in.</strong> You can close this window and return to B-Side.</p>
+    </div>
+    <script>
+        // Plex sends the sign-in popup here when done; B-Side's main window
+        // notices the sign-in on its own, so just close.
+        window.close();
+    </script>
+</body>
+</html>

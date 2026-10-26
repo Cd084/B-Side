@@ -6,6 +6,13 @@ from unittest.mock import MagicMock
 from backend.models import Track, Dimension
 
 
+@pytest.fixture(autouse=True)
+def _sign_in_off_by_default(monkeypatch):
+    """API tests run without Plex sign-in unless a test turns it on
+    (otherwise a real local config with Plex set up would require sign-in)."""
+    monkeypatch.setenv("DISABLE_AUTH", "true")
+
+
 @pytest.fixture
 def mock_plex_tracks() -> list[Track]:
     """Sample library tracks for testing filter/match logic."""

@@ -3697,3 +3697,199 @@ body.no-scroll {
         padding: 0 var(--spacing-sm) var(--spacing-sm);
     }
 }
+
+/* ===== Plex sign-in ===== */
+.signin-screen {
+    position: fixed;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--bg-primary);
+    z-index: 1000;
+    padding: var(--spacing-md, 16px);
+}
+
+.signin-card {
+    max-width: 420px;
+    width: 100%;
+    text-align: center;
+    background: var(--bg-secondary);
+    border-radius: 16px;
+    padding: 40px 32px;
+}
+
+.signin-logo {
+    font-size: 2.5rem;
+    margin: 0 0 8px;
+}
+
+.signin-tagline {
+    color: var(--text-secondary);
+    margin: 0 0 28px;
+}
+
+.signin-btn {
+    font-family: inherit;
+    width: 100%;
+    font-size: 1.1rem;
+    padding: 14px;
+}
+
+.signin-status {
+    margin: 16px 0 0;
+    color: var(--text-secondary);
+}
+
+.signin-status--error {
+    color: #e5534b;
+}
+
+.signin-note {
+    margin: 24px 0 0;
+    font-size: 0.85rem;
+    color: var(--text-secondary);
+}
+
+/* ===== Signed-in user (header) ===== */
+.user-menu {
+    position: relative;
+    margin-left: 8px;
+}
+
+.user-chip {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    background: var(--bg-tertiary);
+    border: none;
+    border-radius: 999px;
+    padding: 4px 12px 4px 4px;
+    color: var(--text-primary);
+    cursor: pointer;
+    font: inherit;
+}
+
+.user-chip:hover {
+    background: var(--bg-hover);
+}
+
+.user-avatar {
+    width: 28px;
+    height: 28px;
+    border-radius: 50%;
+    overflow: hidden;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--bg-hover);
+    color: var(--accent);
+    font-weight: 600;
+    font-size: 0.85rem;
+}
+
+.user-avatar {
+    position: relative;
+}
+
+/* Avatar images cover the initial letter underneath. */
+.user-avatar img,
+.profile-avatar img {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+}
+
+.user-name {
+    max-width: 140px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.user-menu-items {
+    position: absolute;
+    right: 0;
+    top: calc(100% + 6px);
+    min-width: 170px;
+    background: var(--bg-elevated);
+    border-radius: 10px;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+    padding: 6px;
+    z-index: 100;
+}
+
+.user-menu-item {
+    display: block;
+    width: 100%;
+    text-align: left;
+    background: none;
+    border: none;
+    color: var(--text-primary);
+    padding: 10px 12px;
+    border-radius: 6px;
+    cursor: pointer;
+    font: inherit;
+}
+
+.user-menu-item:hover {
+    background: var(--bg-hover);
+}
+
+@media (max-width: 600px) {
+    .user-name {
+        display: none;
+    }
+}
+
+/* ===== Plex Home profiles ===== */
+.profile-avatar {
+    position: relative;
+    overflow: hidden;
+    width: 40px;
+    height: 40px;
+    flex-shrink: 0;
+    border-radius: 50%;
+    background: var(--bg-hover);
+    color: var(--accent);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: 600;
+}
+
+.profile-current {
+    outline: 2px solid var(--accent);
+}
+
+.profile-pin {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.profile-pin input {
+    font-size: 1.5rem;
+    letter-spacing: 0.5em;
+    text-align: center;
+    padding: 10px;
+    background: var(--bg-tertiary);
+    color: var(--accent);
+    border: 1px solid var(--bg-hover);
+    border-radius: 8px;
+}
+
+.profile-pin-error {
+    color: #e5534b;
+    margin: 0;
+}
+
+/* Only the server owner (admin) sees settings and library sync. */
+body.not-admin [data-nav="settings"],
+body.not-admin a[data-view="settings"],
+body.not-admin .footer-refresh,
+body.not-admin .footer-separator:has(+ .footer-refresh) {
+    display: none;
+}

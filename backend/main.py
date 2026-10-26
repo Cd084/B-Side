@@ -13,7 +13,7 @@ from urllib.parse import quote
 
 from fastapi import FastAPI, HTTPException, Query, Request, Response
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from starlette.responses import StreamingResponse
 import httpx
 
@@ -21,6 +21,12 @@ from backend.config import get_config, update_config_values, load_user_yaml_conf
 from backend.version import get_version
 from backend.models import (
     AlbumCandidate,
+    AuthStatusResponse,
+    AuthUser,
+    PlexProfile,
+    PlexSignInStartRequest,
+    PlexSignInStartResponse,
+    SwitchProfileRequest,
     AlbumPreviewResponse,
     AnalyzePromptFiltersRequest,
     AnalyzePromptFiltersResponse,
@@ -71,7 +77,7 @@ from backend.models import (
     album_key,
 )
 from backend.plex_client import PlexClient as PlexClientInstance, get_plex_client, init_plex_client
-from backend import library_cache
+from backend import auth, library_cache, plex_home
 from backend.llm_client import (
     TOKENS_PER_ALBUM,
     estimate_cost_for_model,
@@ -227,6 +233,178 @@ def _build_config_response(config, plex_client) -> ConfigResponse:
         is_local_provider=is_local,
         provider_from_env=os.environ.get("LLM_PROVIDER") is not None,
     )
+
+
+# =============================================================================
+# Plex Sign-in
+# =============================================================================
+# Once Plex is configured, everyone signs in with their own Plex account and
+# B-Side acts as them for their playlists, devices and history. The server
+# owner is the admin (Settings, setup, sync). DISABLE_AUTH=true turns sign-in
+# off (everyone acts as the configured token), e.g. if locked out.
+
+_PUBLIC_API = ("/api/auth/", "/api/health")
+_ADMIN_API = ("/api/setup/validate-plex", "/api/setup/validate-ai", "/api/setup/complete",
+              "/api/library/sync", "/api/ollama/")
+
+
+def auth_enabled() -> bool:
+    if os.environ.get("DISABLE_AUTH", "").lower() in ("1", "true", "yes"):
+        return False
+    config = get_config()
+    return bool(config.plex.url and config.plex.token)
+
+
+class AuthMiddleware:
+    """Requires a signed-in Plex user for the API, and the admin for settings.
+
+    Pure ASGI (not BaseHTTPMiddleware) so the signed-in user stays set for the
+    whole request, including streamed responses.
+    """
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        path = scope.get("path", "")
+        if (
+            scope["type"] != "http"
+            or not path.startswith("/api/")
+            or path.startswith(_PUBLIC_API)
+            or not auth_enabled()
+        ):
+            await self.app(scope, receive, send)
+            return
+        session = auth.get_session(Request(scope).cookies.get(auth.SESSION_COOKIE))
+        if session is None:
+            await JSONResponse({"detail": "Sign in with Plex to use B-Side"}, status_code=401)(scope, receive, send)
+            return
+        admin_only = path.startswith(_ADMIN_API) or (path == "/api/config" and scope["method"] != "GET")
+        if admin_only and not session.is_admin:
+            await JSONResponse({"detail": "Only the server owner can change settings"}, status_code=403)(
+                scope, receive, send
+            )
+            return
+        token = auth.current_session.set(session)
+        try:
+            await self.app(scope, receive, send)
+        finally:
+            auth.current_session.reset(token)
+
+
+app.add_middleware(AuthMiddleware)
+
+
+async def _user_plex_client():
+    """Plex connection acting as the signed-in user (the shared one if sign-in is off)."""
+    session = auth.current_session.get()
+    if session is None:
+        return get_plex_client()
+    config = get_config()
+    return await asyncio.to_thread(
+        auth.plex_client_for, session, config.plex.url, config.plex.music_library
+    )
+
+
+def _results_scope() -> dict:
+    """Limits history to the signed-in user (admin also sees pre-sign-in history)."""
+    session = auth.current_session.get()
+    if session is None:
+        return {}
+    return {"owner": session.user_uuid, "include_unowned": session.is_admin}
+
+
+def _set_cookie(response: Response, request: Request, name: str, value: str, max_age: int) -> None:
+    secure = request.url.scheme == "https" or request.headers.get("x-forwarded-proto") == "https"
+    response.set_cookie(name, value, max_age=max_age, httponly=True, samesite="lax", secure=secure, path="/")
+
+
+def _auth_status(session: auth.Session | None) -> AuthStatusResponse:
+    return AuthStatusResponse(
+        auth_required=auth_enabled(),
+        signed_in=session is not None,
+        user=AuthUser(
+            title=session.user_title,
+            thumb=session.user_thumb,
+            is_admin=session.is_admin,
+            can_switch_profile=session.home,
+        ) if session else None,
+    )
+
+
+@app.get("/api/auth/me", response_model=AuthStatusResponse)
+async def auth_me(request: Request) -> AuthStatusResponse:
+    """Whether sign-in is required, and who is signed in."""
+    if not auth_enabled():
+        return AuthStatusResponse(auth_required=False, signed_in=False)
+    return _auth_status(auth.get_session(request.cookies.get(auth.SESSION_COOKIE)))
+
+
+@app.post("/api/auth/plex/start", response_model=PlexSignInStartResponse)
+async def auth_plex_start(request: Request, body: PlexSignInStartRequest, response: Response):
+    """Start a Plex sign-in: returns Plex's sign-in page to open."""
+    try:
+        nonce, url = await asyncio.to_thread(auth.create_login, body.forward_url)
+    except auth.AuthError as e:
+        raise HTTPException(status_code=502, detail=str(e))
+    _set_cookie(response, request, auth.LOGIN_COOKIE, nonce, auth.LOGIN_PIN_TTL)
+    return PlexSignInStartResponse(auth_url=url)
+
+
+@app.post("/api/auth/plex/check", response_model=AuthStatusResponse)
+async def auth_plex_check(request: Request, response: Response) -> AuthStatusResponse:
+    """Poll a Plex sign-in. Signs the browser in once Plex has approved it."""
+    plex_client = get_plex_client()
+    if not plex_client or not plex_client.is_connected():
+        raise HTTPException(status_code=503, detail="B-Side can't reach the Plex server right now")
+    try:
+        token = await asyncio.to_thread(auth.poll_login, request.cookies.get(auth.LOGIN_COOKIE))
+        if not token:
+            return AuthStatusResponse(auth_required=True, signed_in=False)
+        raw, session = await asyncio.to_thread(auth.sign_in, token, plex_client.get_machine_identifier())
+    except auth.AuthError as e:
+        raise HTTPException(status_code=403, detail=str(e))
+    _set_cookie(response, request, auth.SESSION_COOKIE, raw, auth.SESSION_MAX_IDLE)
+    response.delete_cookie(auth.LOGIN_COOKIE, path="/")
+    return _auth_status(session)
+
+
+@app.get("/api/auth/profiles", response_model=list[PlexProfile])
+async def auth_profiles(request: Request) -> list[PlexProfile]:
+    """Plex Home profiles the signed-in account can switch to."""
+    session = auth.get_session(request.cookies.get(auth.SESSION_COOKIE))
+    if session is None:
+        raise HTTPException(status_code=401, detail="Sign in with Plex first")
+    try:
+        profiles = await asyncio.to_thread(auth.list_profiles, session)
+    except plex_home.PlexHomeError as e:
+        raise HTTPException(status_code=502, detail=str(e))
+    return [PlexProfile(**p, current=p["uuid"] == session.user_uuid) for p in profiles]
+
+
+@app.post("/api/auth/profile", response_model=AuthStatusResponse)
+async def auth_switch_profile(request: Request, body: SwitchProfileRequest) -> AuthStatusResponse:
+    """Act as another Plex Home profile (PIN if it has one)."""
+    session = auth.get_session(request.cookies.get(auth.SESSION_COOKIE))
+    if session is None:
+        raise HTTPException(status_code=401, detail="Sign in with Plex first")
+    plex_client = get_plex_client()
+    if not plex_client or not plex_client.is_connected():
+        raise HTTPException(status_code=503, detail="B-Side can't reach the Plex server right now")
+    try:
+        session = await asyncio.to_thread(
+            auth.switch_profile, session, body.uuid, plex_client.get_machine_identifier(), body.pin
+        )
+    except (auth.AuthError, plex_home.PlexHomeError) as e:
+        raise HTTPException(status_code=403 if "PIN" in str(e) else 400, detail=str(e))
+    return _auth_status(session)
+
+
+@app.post("/api/auth/logout", response_model=AuthStatusResponse)
+async def auth_logout(request: Request, response: Response) -> AuthStatusResponse:
+    await asyncio.to_thread(auth.sign_out, request.cookies.get(auth.SESSION_COOKIE))
+    response.delete_cookie(auth.SESSION_COOKIE, path="/")
+    return AuthStatusResponse(auth_required=auth_enabled(), signed_in=False)
 
 
 # =============================================================================
@@ -812,6 +990,9 @@ async def generate_playlist_sse(request: GenerateRequest) -> StreamingResponse:
             raise HTTPException(status_code=404, detail="Seed track not found")
         selected_dimensions = request.seed_track.selected_dimensions
 
+    # Captured here: the stream runs in a worker thread, outside this request's context.
+    owner = auth.current_owner()
+
     def event_stream():
         yield from generate_playlist_stream(
             prompt=request.prompt,
@@ -826,6 +1007,7 @@ async def generate_playlist_sse(request: GenerateRequest) -> StreamingResponse:
             min_rating=request.min_rating,
             max_tracks_to_ai=request.max_tracks_to_ai,
             exclude_seasonal=request.exclude_seasonal,
+            owner=owner,
         )
 
     return StreamingResponse(
@@ -847,7 +1029,7 @@ async def generate_playlist_sse(request: GenerateRequest) -> StreamingResponse:
 @app.post("/api/playlist", response_model=SavePlaylistResponse)
 async def save_playlist(request: SavePlaylistRequest) -> SavePlaylistResponse:
     """Save a playlist to Plex."""
-    plex_client = get_plex_client()
+    plex_client = await _user_plex_client()
     if not plex_client or not plex_client.is_connected():
         raise HTTPException(status_code=503, detail="Plex not connected")
 
@@ -868,7 +1050,7 @@ async def save_playlist(request: SavePlaylistRequest) -> SavePlaylistResponse:
 @app.get("/api/plex/clients", response_model=list[PlexClientInfo])
 async def get_plex_clients() -> list[PlexClientInfo]:
     """List online Plex clients capable of playback."""
-    plex_client = get_plex_client()
+    plex_client = await _user_plex_client()
     if not plex_client or not plex_client.is_connected():
         raise HTTPException(status_code=503, detail="Plex not connected")
 
@@ -878,7 +1060,7 @@ async def get_plex_clients() -> list[PlexClientInfo]:
 @app.post("/api/play-queue", response_model=PlayQueueResponse)
 async def create_play_queue(request: PlayQueueRequest) -> PlayQueueResponse:
     """Create a play queue and start playback on a Plex client."""
-    plex_client = get_plex_client()
+    plex_client = await _user_plex_client()
     if not plex_client or not plex_client.is_connected():
         raise HTTPException(status_code=503, detail="Plex not connected")
 
@@ -900,7 +1082,7 @@ async def create_play_queue(request: PlayQueueRequest) -> PlayQueueResponse:
 @app.get("/api/plex/playlists", response_model=list[PlexPlaylistInfo])
 async def get_plex_playlists() -> list[PlexPlaylistInfo]:
     """List audio playlists on the Plex server."""
-    plex_client = get_plex_client()
+    plex_client = await _user_plex_client()
     if not plex_client or not plex_client.is_connected():
         raise HTTPException(status_code=503, detail="Plex not connected")
 
@@ -910,7 +1092,7 @@ async def get_plex_playlists() -> list[PlexPlaylistInfo]:
 @app.post("/api/playlist/update", response_model=UpdatePlaylistResponse)
 async def update_playlist(request: UpdatePlaylistRequest) -> UpdatePlaylistResponse:
     """Update an existing Plex playlist by replacing or appending tracks."""
-    plex_client = get_plex_client()
+    plex_client = await _user_plex_client()
     if not plex_client or not plex_client.is_connected():
         raise HTTPException(status_code=503, detail="Plex not connected")
 
@@ -1254,6 +1436,7 @@ async def recommend_generate(request: RecommendGenerateRequest, raw_request: Req
     # where available (immutable per-request); only read session for
     # accumulated state (prompt set during questions, previously_recommended).
     _prompt = session.prompt
+    _owner = auth.current_owner()
     _answers = list(request.answers) if request.answers else []
     _answer_texts = list(request.answer_texts) if request.answer_texts else []
     _familiarity_pref = request.familiarity_pref
@@ -1513,6 +1696,7 @@ async def recommend_generate(request: RecommendGenerateRequest, raw_request: Req
                     artist=rec_artist,
                     art_rating_key=rec_art_key,
                     subtitle=rec_subtitle,
+                    owner=_owner,
                 )
             except Exception as e:
                 logger.warning("Failed to save recommendation result: %s", e)
@@ -1581,7 +1765,7 @@ async def list_results(
         if invalid:
             raise HTTPException(status_code=400, detail=f"Invalid result type: {', '.join(sorted(invalid))}")
     results, total = await asyncio.to_thread(
-        library_cache.list_results, result_type=type, limit=limit, offset=offset
+        library_cache.list_results, result_type=type, limit=limit, offset=offset, **_results_scope()
     )
     return ResultListResponse(
         results=[ResultListItem(**r) for r in results],
@@ -1597,7 +1781,7 @@ async def get_result(result_id: str) -> ResultDetail:
     """Fetch a single saved result with full snapshot."""
     if not _RESULT_ID_RE.match(result_id):
         raise HTTPException(status_code=400, detail="Invalid result ID format")
-    result = await asyncio.to_thread(library_cache.get_result, result_id)
+    result = await asyncio.to_thread(library_cache.get_result, result_id, **_results_scope())
     if not result:
         raise HTTPException(status_code=404, detail="Result not found")
     return ResultDetail(**result)
@@ -1608,7 +1792,7 @@ async def delete_result(result_id: str):
     """Delete a saved result."""
     if not _RESULT_ID_RE.match(result_id):
         raise HTTPException(status_code=400, detail="Invalid result ID format")
-    deleted = await asyncio.to_thread(library_cache.delete_result, result_id)
+    deleted = await asyncio.to_thread(library_cache.delete_result, result_id, **_results_scope())
     if not deleted:
         raise HTTPException(status_code=404, detail="Result not found")
     return Response(status_code=204)
