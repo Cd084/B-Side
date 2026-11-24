@@ -72,20 +72,20 @@ B-Side is an independent project, not affiliated with or endorsed by Plex.
 
 ## Quick Start
 
-B-Side doesn't publish a ready-made Docker image yet, so Docker builds it from this repository. That takes a couple of minutes the first time:
-
 ```bash
-git clone https://github.com/Cd084/B-Side.git
-cd B-Side
-cp .env.example .env      # then fill in PLEX_URL, PLEX_TOKEN and an AI provider
-docker compose up -d --build
+docker run -d \
+  --name b-side \
+  -p 5765:5765 \
+  -v b-side-data:/app/data \
+  --restart unless-stopped \
+  ghcr.io/cd084/b-side:latest
 ```
 
 Open **http://localhost:5765** — a setup wizard walks you through connecting Plex, choosing an AI provider, and syncing your library.
 
 You can also pass credentials as environment variables to skip the wizard. See [Configuration](#configuration) for details.
 
-**Requirements:** Docker, a Plex server with music, the server owner's [Plex token](https://support.plex.tv/articles/204059436-finding-an-authentication-token-x-plex-token/), and an API key from Google, Anthropic, or OpenAI (or a local model via Ollama).
+**Requirements:** Docker on an x86-64 machine (for ARM, see [NAS Platforms](#nas-platforms)), a Plex server with music, the server owner's [Plex token](https://support.plex.tv/articles/204059436-finding-an-authentication-token-x-plex-token/), and an API key from Google, Anthropic, or OpenAI (or a local model via Ollama).
 
 ---
 
@@ -201,9 +201,9 @@ Estimated cost displays before you generate. B-Side auto-detects your provider b
 ### Docker Compose (Recommended)
 
 ```bash
-git clone https://github.com/Cd084/B-Side.git
-cd B-Side
-cp .env.example .env
+mkdir b-side && cd b-side
+curl -O https://raw.githubusercontent.com/Cd084/B-Side/main/docker-compose.yml
+curl -o .env https://raw.githubusercontent.com/Cd084/B-Side/main/.env.example
 ```
 
 Edit `.env`:
@@ -218,41 +218,73 @@ GEMINI_API_KEY=your-gemini-key
 # OPENAI_API_KEY=sk-your-key
 ```
 
-Start (`--build` builds the image from the source; run it again after `git pull` to update):
+Start:
 
 ```bash
-docker compose up -d --build
+docker compose up -d
 ```
+
+To update: `docker compose pull && docker compose up -d`.
 
 ### NAS Platforms
 
-B-Side has no ready-made image to pull, so the NAS has to build it from this repository.
-
-<details>
-<summary><strong>Portainer</strong></summary>
-
-1. **Stacks → Add stack**, give it a name, and choose **Repository**.
-2. **Repository URL:** `https://github.com/Cd084/B-Side`. **Compose path:** `docker-compose.yml`.
-3. Under **Environment variables**, add `PLEX_URL`, `PLEX_TOKEN` and your AI provider's settings (see [Configuration](#configuration)).
-4. **Deploy the stack.** To update later, open the stack and choose **Pull and redeploy**.
-
-</details>
+The image is `ghcr.io/cd084/b-side:latest`, on GitHub's container registry.
 
 <details>
 <summary><strong>Synology (Container Manager)</strong></summary>
 
-1. Download this repository, using **Code → Download ZIP** on GitHub, and unzip it into a folder such as `/volume1/docker/b-side`.
-2. Rename `.env.example` to `.env` and fill it in.
-3. **Container Manager → Project → Create**, point it at that folder, and let it build.
-
-Some Synology models, especially ARM-based ones, don't support Container Manager. See [Bare Metal](#bare-metal-no-docker) below. The [Synology setup guide](docs/synology-setup-guide.md) comes from MediaSage: it uses MediaSage's image, but the settings it describes are the same.
+Follow the step-by-step [Synology setup guide](docs/synology-setup-guide.md).
 
 </details>
 
 <details>
-<summary><strong>Unraid, TrueNAS and others</strong></summary>
+<summary><strong>Unraid</strong></summary>
 
-These expect a ready-made image. Build one on any machine with Docker (`docker compose build`) and push it to your own registry, or use Portainer as above.
+1. **Docker** → **Add Container**
+2. Repository: `ghcr.io/cd084/b-side:latest`
+3. Port: 5765 → 5765
+4. Add variables: `PLEX_URL`, `PLEX_TOKEN`, and your AI provider's settings
+
+</details>
+
+<details>
+<summary><strong>TrueNAS SCALE</strong></summary>
+
+1. **Apps** → **Discover Apps** → **Custom App**
+2. Image: `ghcr.io/cd084/b-side`, Tag: `latest`
+3. Port: 5765
+4. Add environment variables
+
+</details>
+
+<details>
+<summary><strong>Portainer</strong></summary>
+
+**Stacks** → **Add Stack**:
+
+```yaml
+services:
+  b-side:
+    image: ghcr.io/cd084/b-side:latest
+    ports:
+      - "5765:5765"
+    environment:
+      - PLEX_URL=http://your-server:32400
+      - PLEX_TOKEN=your-token
+      - GEMINI_API_KEY=your-key   # or LLM_PROVIDER=ollama and OLLAMA_URL=...
+    volumes:
+      - ./data:/app/data
+    restart: unless-stopped
+```
+
+To update, open the stack and choose **Pull and redeploy**.
+
+</details>
+
+<details>
+<summary><strong>ARM devices (Raspberry Pi, ARM-based Synology)</strong></summary>
+
+The ready-made image is for x86-64 only. On ARM, either build the image yourself (`git clone https://github.com/Cd084/B-Side.git`, then `docker compose build` after switching `docker-compose.yml` to `build: .`), or run B-Side without Docker as below.
 
 </details>
 
