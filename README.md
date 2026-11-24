@@ -57,11 +57,12 @@ B-Side is an independent project, not affiliated with or endorsed by Plex.
 |---|---|---|
 | ![Describe your playlist](docs/images/bside-prompt.png) | ![Follow-up questions about the prompt](docs/images/bside-refine.png) | ![Genre, decade, size and scan filters](docs/images/bside-filters.png) |
 
-<details>
-<summary><strong>Results and album recommendations</strong> (screenshots from MediaSage; B-Side's look the same apart from the name)</summary>
+**4. The result:** a named, described playlist from your own library, ready to save to Plex or play now.
 
-*Sample Generated Playlist:*
-![Generated playlist](docs/images/screenshot-playlist.png)
+![A finished 100-track playlist](docs/images/bside-results.png)
+
+<details>
+<summary><strong>Album recommendations</strong> (screenshots from MediaSage; B-Side's look the same apart from the name)</summary>
 
 *Sample Generated Album Recommendation:*
 ![Album recommendation](docs/images/screenshot-album.png)
