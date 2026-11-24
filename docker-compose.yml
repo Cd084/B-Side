@@ -1,7 +1,7 @@
 services:
   b-side:
-    # Ready-made image (x86-64), built from this repository by GitHub Actions.
-    # To build it yourself instead (e.g. on ARM), comment out 'image' and
+    # Ready-made image (x86-64 and arm64), built from this repository by GitHub Actions.
+    # To build it yourself instead, comment out 'image' and
     # uncomment 'build', then run: docker compose up -d --build
     image: ghcr.io/cd084/b-side:latest
     # build: .

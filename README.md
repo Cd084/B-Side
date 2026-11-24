@@ -85,7 +85,7 @@ Open **http://localhost:5765** — a setup wizard walks you through connecting P
 
 You can also pass credentials as environment variables to skip the wizard. See [Configuration](#configuration) for details.
 
-**Requirements:** Docker on an x86-64 machine (for ARM, see [NAS Platforms](#nas-platforms)), a Plex server with music, the server owner's [Plex token](https://support.plex.tv/articles/204059436-finding-an-authentication-token-x-plex-token/), and an API key from Google, Anthropic, or OpenAI (or a local model via Ollama).
+**Requirements:** Docker (x86-64 or 64-bit ARM), a Plex server with music, the server owner's [Plex token](https://support.plex.tv/articles/204059436-finding-an-authentication-token-x-plex-token/), and an API key from Google, Anthropic, or OpenAI (or a local model via Ollama).
 
 ---
 
@@ -228,7 +228,7 @@ To update: `docker compose pull && docker compose up -d`.
 
 ### NAS Platforms
 
-The image is `ghcr.io/cd084/b-side:latest`, on GitHub's container registry.
+The image is `ghcr.io/cd084/b-side:latest`, on GitHub's container registry. It runs on x86-64 and 64-bit ARM (arm64), such as a Raspberry Pi 4 or 5. Many ARM-based Synology models can't run Container Manager at all; for those, see [Bare Metal](#bare-metal-no-docker).
 
 <details>
 <summary><strong>Synology (Container Manager)</strong></summary>
@@ -278,13 +278,6 @@ services:
 ```
 
 To update, open the stack and choose **Pull and redeploy**.
-
-</details>
-
-<details>
-<summary><strong>ARM devices (Raspberry Pi, ARM-based Synology)</strong></summary>
-
-The ready-made image is for x86-64 only. On ARM, either build the image yourself (`git clone https://github.com/Cd084/B-Side.git`, then `docker compose build` after switching `docker-compose.yml` to `build: .`), or run B-Side without Docker as below.
 
 </details>
 
