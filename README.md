@@ -174,10 +174,10 @@ Bring your own API key—or run locally:
 | **Google Gemini** | ~18,000 | $0.03 – $0.25 | Large libraries, lowest cost |
 | **Anthropic Claude** | ~3,500 | $0.15 – $0.25 | Nuanced recommendations |
 | **OpenAI GPT** | ~2,300 | $0.05 – $0.10 | Solid all-around |
-| **Ollama** ⚗️ | Varies | Free | Privacy, local inference |
-| **Custom** ⚗️ | Configurable | Free | Self-hosted, OpenAI-compatible APIs |
+| **Ollama** | Any size (scanned in batches) | Free | Privacy, local inference |
+| **Custom** | Any size (scanned in batches) | Free | Self-hosted, OpenAI-compatible APIs |
 
-⚗️ *Local LLM support is experimental. [Report issues](https://github.com/Cd084/B-Side/issues).*
+Local models are what B-Side is built for. See [Local LLM Setup](#local-llm-setup).
 
 > **Free option:** Google Gemini offers a free API tier that's more than enough for personal use — no credit card required. See the [Gemini free credit guide](docs/gemini-free-credit-guide.md) for setup instructions and details.
 
@@ -383,46 +383,59 @@ B-Side uses a two-model strategy by default:
 
 This balances quality with cost. Enable `smart_generation: true` to use the analysis model for everything.
 
-### Local LLM Setup (Experimental)
+### Local LLM Setup
 
-Run B-Side with local models for privacy and zero API costs.
+Run B-Side with local models for privacy and no API costs. This is the main reason B-Side exists. The library is scanned in batches that fit the model's context, so any library size and any playlist size (up to 2,000 tracks) works, even with an 8k-context model.
+
+B-Side uses **two models**:
+- the **Generation** model scans the library batches, so a small, fast model is best;
+- the **Analysis** model makes the final picks and ordering and writes descriptions, so use the strongest model you can.
 
 <details>
 <summary><strong>Ollama</strong></summary>
 
-1. Install [Ollama](https://ollama.ai) and pull a model:
+1. Install [Ollama](https://ollama.com) and pull a model or two, for example:
    ```bash
-   ollama pull llama3:8b
+   ollama pull qwen3.5:9b
    ```
 
-2. Configure B-Side via environment or Settings UI:
+2. Configure B-Side through the environment or the Settings page:
    ```bash
    LLM_PROVIDER=ollama
    OLLAMA_URL=http://localhost:11434
    ```
+   In Docker, `localhost` is the container itself. Use the Ollama machine's address, or `http://host.docker.internal:11434` if Ollama runs on the same host.
 
-3. Select your model in Settings → the context window is auto-detected.
+3. In Settings, choose the **Analysis** and **Generation** models. B-Side detects each model's context window.
 
-**Recommended models:** `llama3:8b`, `qwen3:8b`, `mistral` — models with 8K+ context work best.
+**Models:**
+- A Qwen 3.5 model (`qwen3.5:9b` or `qwen3.5:4b`) works well for **Generation**.
+- A larger model of around 27B parameters is a good **Analysis** model if you have the memory. Otherwise use the same model for both.
+- B-Side has been used day-to-day with `qwen3.5:9b` scanning and a 27B model curating, on two Nvidia P40s (48 GB) and a library of about 45,000 tracks.
+
+**Tuning:**
+- `OLLAMA_NUM_CTX` is the context each call uses. The default is the model's context, capped at 16k so large-context models don't run out of GPU memory.
+- `LLM_CONCURRENCY` is how many batches are scanned in parallel.
+- See `config.example.yaml` for both.
 
 </details>
 
 <details>
 <summary><strong>Custom OpenAI-Compatible API</strong></summary>
 
-For LM Studio, text-generation-webui, vLLM, or any OpenAI-compatible server:
+For LM Studio, text-generation-webui, vLLM, LiteLLM, or any OpenAI-compatible server:
 
-1. Start your server with an OpenAI-compatible endpoint
+1. Start your server with an OpenAI-compatible endpoint.
 
 2. Configure in Settings:
-   - **API Base URL:** `http://localhost:5000/v1`
-   - **API Key:** If required by your server
-   - **Model Name:** The model identifier
-   - **Context Window:** Your model's context size
+   - **API Base URL:** e.g. `http://localhost:5000/v1`
+   - **API Key:** if your server needs one
+   - **Model Name:** the model identifier
+   - **Context Window:** your model's context size
 
 </details>
 
-**Note:** Local models are slower and may produce less accurate results than cloud providers. A 10-minute timeout is used for generation. Models with larger context windows will support more tracks.
+**Speed:** local models are slower than cloud ones. A large playlist from a big library can take several minutes; progress is shown batch by batch while it works.
 
 ---
 

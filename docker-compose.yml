@@ -30,12 +30,12 @@ services:
       #- LLM_MODEL_ANALYSIS=gemini-2.5-flash
       #- LLM_MODEL_GENERATION=gemini-2.5-flash
 
-      # Local LLM: Ollama (experimental)
+      # Local LLM: Ollama
       #- LLM_PROVIDER=ollama
       #- OLLAMA_URL=http://host.docker.internal:11434
       #- OLLAMA_CONTEXT_WINDOW=32768
 
-      # Local LLM: Custom OpenAI-compatible API (experimental)
+      # Local LLM: Custom OpenAI-compatible API
       #- LLM_PROVIDER=custom
       #- CUSTOM_LLM_URL=https://openrouter.ai/api/v1
       #- CUSTOM_LLM_API_KEY=sk-or-your-key
