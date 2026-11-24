@@ -51,22 +51,25 @@ B-Side is a self-hosted web app that creates playlists and recommends albums by 
 
 B-Side is an independent project, not affiliated with or endorsed by Plex.
 
-*These screenshots are from MediaSage. B-Side looks much the same, apart from its name, the Plex sign-in and a few extra options.*
+**Making a playlist in B-Side:**
+
+| 1. Describe it | 2. Answer a couple of questions | 3. Filter the library |
+|---|---|---|
+| ![Describe your playlist](docs/images/bside-prompt.png) | ![Follow-up questions about the prompt](docs/images/bside-refine.png) | ![Genre, decade, size and scan filters](docs/images/bside-filters.png) |
+
+<details>
+<summary><strong>Results and album recommendations</strong> (screenshots from MediaSage; B-Side's look the same apart from the name)</summary>
 
 *Sample Generated Playlist:*
-![MediaSage Screenshot](docs/images/screenshot-playlist.png)
+![Generated playlist](docs/images/screenshot-playlist.png)
 
 *Sample Generated Album Recommendation:*
-![MediaSage Screenshot](docs/images/screenshot-album.png)
-
-*Home Screen:*
-![MediaSage Screenshot](docs/images/screenshot-home.png)
-
-*Playlist Flow:*
-![MediaSage Screenshot](docs/images/screenshot-playlist-start.png)
+![Album recommendation](docs/images/screenshot-album.png)
 
 *Album Flow:*
-![MediaSage Screenshot](docs/images/screenshot-album-start.png)
+![Album flow](docs/images/screenshot-album-start.png)
+
+</details>
 
 ---
 
