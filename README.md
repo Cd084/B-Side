@@ -38,14 +38,20 @@
 >   a banner when the library is out of date, and syncs that keep the old
 >   snapshot usable until the new one is complete.
 >
-> The rest of this README is upstream's; Docker image names and links there
-> refer to the original MediaSage project. To run B-Side in Docker, build it
-> from this repository (`docker compose up -d --build`).
+> - **Plex sign-in for everyone** you share your server with, each saving
+>   playlists to their own Plex account (see [Signing in](#signing-in-multiple-users)).
+>
+> Much of the rest of this README comes from MediaSage, with install steps
+> changed for B-Side.
 >
 > Tuning: `OLLAMA_NUM_CTX` (context per call) and `LLM_CONCURRENCY` (parallel
 > batch calls). See `config.example.yaml`.
 
-MediaSage is a self-hosted web app that creates playlists and recommends albums by combining LLM intelligence with your Plex library. Every suggestion is guaranteed playable because it only considers music you have.
+B-Side is a self-hosted web app that creates playlists and recommends albums by combining LLM intelligence with your Plex library. Every suggestion is guaranteed playable because it only considers music you have.
+
+B-Side is an independent project, not affiliated with or endorsed by Plex.
+
+*These screenshots are from MediaSage. B-Side looks much the same, apart from its name, the Plex sign-in and a few extra options.*
 
 *Sample Generated Playlist:*
 ![MediaSage Screenshot](docs/images/screenshot-playlist.png)
@@ -66,36 +72,38 @@ MediaSage is a self-hosted web app that creates playlists and recommends albums 
 
 ## Quick Start
 
+B-Side doesn't publish a ready-made Docker image yet, so Docker builds it from this repository. That takes a couple of minutes the first time:
+
 ```bash
-docker run -d \
-  --name mediasage \
-  -p 5765:5765 \
-  -v mediasage-data:/app/data \
-  --restart unless-stopped \
-  ghcr.io/ecwilsonaz/mediasage:latest
+git clone https://github.com/Cd084/B-Side.git
+cd B-Side
+cp .env.example .env      # then fill in PLEX_URL, PLEX_TOKEN and an AI provider
+docker compose up -d --build
 ```
 
 Open **http://localhost:5765** — a setup wizard walks you through connecting Plex, choosing an AI provider, and syncing your library.
 
 You can also pass credentials as environment variables to skip the wizard. See [Configuration](#configuration) for details.
 
-**Requirements:** Docker, a Plex server with music, a [Plex token](https://support.plex.tv/articles/204059436-finding-an-authentication-token-x-plex-token/), and an API key from Google, Anthropic, or OpenAI (or a local model via Ollama).
+**Requirements:** Docker, a Plex server with music, the server owner's [Plex token](https://support.plex.tv/articles/204059436-finding-an-authentication-token-x-plex-token/), and an API key from Google, Anthropic, or OpenAI (or a local model via Ollama).
 
 ---
 
 ## Contents
 
-- [Why MediaSage?](#why-mediasage)
+- [Why filter-first?](#why-filter-first)
 - [Features](#features)
 - [Installation](#installation)
 - [Configuration](#configuration)
 - [How It Works](#how-it-works)
 - [Development](#development)
 - [API Reference](#api-reference)
+- [Privacy](#privacy)
+- [License](#license)
 
 ---
 
-## Why MediaSage?
+## Why filter-first?
 
 **Plex users with personal music libraries have few good options for AI playlists.**
 
@@ -103,7 +111,7 @@ Plexamp's built-in Sonic Sage used ChatGPT to generate playlists, but it was des
 
 When [Tidal integration ended in October 2024](https://forums.plex.tv/t/tidal-integration-with-plex-ending-october-28-2024/885728), Sonic Sage lost its foundation. Generic tools like ChatGPT have the same problem: they recommend from an infinite catalog with no awareness of what you actually own.
 
-**MediaSage inverts the approach:**
+**MediaSage, and so B-Side, inverts the approach:**
 
 | Filter-Last (Sonic Sage, ChatGPT) | Filter-First (MediaSage) |
 |-----------------------------------|-------------------------|
@@ -150,7 +158,7 @@ Real-time track counts show exactly how your filters narrow results.
 
 ### Local Library Cache
 
-MediaSage syncs your Plex library to a local SQLite database. After a one-time sync (~2 min for 18,000 tracks), all library operations—filtering, counting, sending to AI—happen locally in milliseconds instead of waiting on Plex.
+B-Side syncs your Plex library to a local SQLite database. After a one-time sync (~2 min for 18,000 tracks), all library operations—filtering, counting, sending to AI—happen locally in milliseconds instead of waiting on Plex.
 
 - **Setup wizard** walks you through first-run configuration and sync
 - **Footer status** shows track count and last sync time
@@ -169,11 +177,11 @@ Bring your own API key—or run locally:
 | **Ollama** ⚗️ | Varies | Free | Privacy, local inference |
 | **Custom** ⚗️ | Configurable | Free | Self-hosted, OpenAI-compatible APIs |
 
-⚗️ *Local LLM support is experimental. [Report issues](https://github.com/ecwilsonaz/mediasage/issues).*
+⚗️ *Local LLM support is experimental. [Report issues](https://github.com/Cd084/B-Side/issues).*
 
 > **Free option:** Google Gemini offers a free API tier that's more than enough for personal use — no credit card required. See the [Gemini free credit guide](docs/gemini-free-credit-guide.md) for setup instructions and details.
 
-Estimated cost displays before you generate. MediaSage auto-detects your provider based on which key you configure.
+Estimated cost displays before you generate. B-Side auto-detects your provider based on which key you configure.
 
 ### Play and Save
 
@@ -193,10 +201,9 @@ Estimated cost displays before you generate. MediaSage auto-detects your provide
 ### Docker Compose (Recommended)
 
 ```bash
-mkdir mediasage && cd mediasage
-curl -O https://raw.githubusercontent.com/ecwilsonaz/mediasage/main/docker-compose.yml
-curl -O https://raw.githubusercontent.com/ecwilsonaz/mediasage/main/.env.example
-mv .env.example .env
+git clone https://github.com/Cd084/B-Side.git
+cd B-Side
+cp .env.example .env
 ```
 
 Edit `.env`:
@@ -211,86 +218,51 @@ GEMINI_API_KEY=your-gemini-key
 # OPENAI_API_KEY=sk-your-key
 ```
 
-Start:
+Start (`--build` builds the image from the source; run it again after `git pull` to update):
 
 ```bash
-docker compose up -d
+docker compose up -d --build
 ```
 
 ### NAS Platforms
 
-<details>
-<summary><strong>Synology (Container Manager)</strong></summary>
-
-**GUI:**
-1. **Container Manager** → **Registry** → Search `ghcr.io/ecwilsonaz/mediasage`
-2. Download `latest` tag
-3. **Container** → **Create**
-4. Port: 5765 → 5765
-5. Add environment variables: `PLEX_URL`, `PLEX_TOKEN`, `GEMINI_API_KEY`
-
-**Docker Compose:**
-```bash
-mkdir -p /volume1/docker/mediasage && cd /volume1/docker/mediasage
-curl -O https://raw.githubusercontent.com/ecwilsonaz/mediasage/main/docker-compose.yml
-curl -O https://raw.githubusercontent.com/ecwilsonaz/mediasage/main/.env.example
-mv .env.example .env && nano .env
-```
-Then in **Container Manager** → **Project** → **Create**, point to `/volume1/docker/mediasage`.
-
-**No Docker?** Some Synology models (especially ARM-based units) don't support Docker/Container Manager. See [Bare Metal](#bare-metal-no-docker) below for running MediaSage directly with Python.
-
-</details>
-
-<details>
-<summary><strong>Unraid</strong></summary>
-
-1. **Docker** → **Add Container**
-2. Repository: `ghcr.io/ecwilsonaz/mediasage:latest`
-3. Port: 5765 → 5765
-4. Add variables: `PLEX_URL`, `PLEX_TOKEN`, `GEMINI_API_KEY`
-
-</details>
-
-<details>
-<summary><strong>TrueNAS SCALE</strong></summary>
-
-1. **Apps** → **Discover Apps** → **Custom App**
-2. Image: `ghcr.io/ecwilsonaz/mediasage`, Tag: `latest`
-3. Port: 5765
-4. Add environment variables
-
-</details>
+B-Side has no ready-made image to pull, so the NAS has to build it from this repository.
 
 <details>
 <summary><strong>Portainer</strong></summary>
 
-**Stacks** → **Add Stack**:
+1. **Stacks → Add stack**, give it a name, and choose **Repository**.
+2. **Repository URL:** `https://github.com/Cd084/B-Side`. **Compose path:** `docker-compose.yml`.
+3. Under **Environment variables**, add `PLEX_URL`, `PLEX_TOKEN` and your AI provider's settings (see [Configuration](#configuration)).
+4. **Deploy the stack.** To update later, open the stack and choose **Pull and redeploy**.
 
-```yaml
-services:
-  mediasage:
-    image: ghcr.io/ecwilsonaz/mediasage:latest
-    ports:
-      - "5765:5765"
-    environment:
-      - PLEX_URL=http://your-server:32400
-      - PLEX_TOKEN=your-token
-      - GEMINI_API_KEY=your-key
-    volumes:
-      - ./data:/app/data
-    restart: unless-stopped
-```
+</details>
+
+<details>
+<summary><strong>Synology (Container Manager)</strong></summary>
+
+1. Download this repository, using **Code → Download ZIP** on GitHub, and unzip it into a folder such as `/volume1/docker/b-side`.
+2. Rename `.env.example` to `.env` and fill it in.
+3. **Container Manager → Project → Create**, point it at that folder, and let it build.
+
+Some Synology models, especially ARM-based ones, don't support Container Manager. See [Bare Metal](#bare-metal-no-docker) below. The [Synology setup guide](docs/synology-setup-guide.md) comes from MediaSage: it uses MediaSage's image, but the settings it describes are the same.
+
+</details>
+
+<details>
+<summary><strong>Unraid, TrueNAS and others</strong></summary>
+
+These expect a ready-made image. Build one on any machine with Docker (`docker compose build`) and push it to your own registry, or use Portainer as above.
 
 </details>
 
 ### Bare Metal (No Docker)
 
-Docker isn't required. MediaSage is Python + FastAPI with no native dependencies, so it runs on any machine with Python 3.11+ — including ARM-based Synology NAS models, Raspberry Pis, or any Linux/macOS/Windows box.
+Docker isn't required. B-Side is Python + FastAPI with no native dependencies, so it runs on any machine with Python 3.11+ — including ARM-based Synology NAS models, Raspberry Pis, or any Linux/macOS/Windows box.
 
 ```bash
-git clone https://github.com/ecwilsonaz/mediasage.git
-cd mediasage
+git clone https://github.com/Cd084/B-Side.git
+cd B-Side
 python -m venv venv
 source venv/bin/activate
 pip install -r requirements.txt
@@ -315,20 +287,20 @@ Access at **http://your-machine-ip:5765**.
 <details>
 <summary><strong>Running as a background service (systemd)</strong></summary>
 
-To keep MediaSage running after you close your terminal, create a systemd service:
+To keep B-Side running after you close your terminal, create a systemd service:
 
 ```ini
-# /etc/systemd/system/mediasage.service
+# /etc/systemd/system/b-side.service
 [Unit]
-Description=MediaSage
+Description=B-Side
 After=network.target
 
 [Service]
 Type=simple
 User=your-user
-WorkingDirectory=/path/to/mediasage
-EnvironmentFile=/path/to/mediasage/.env
-ExecStart=/path/to/mediasage/venv/bin/uvicorn backend.main:app --host 0.0.0.0 --port 5765
+WorkingDirectory=/path/to/B-Side
+EnvironmentFile=/path/to/B-Side/.env
+ExecStart=/path/to/B-Side/venv/bin/uvicorn backend.main:app --host 0.0.0.0 --port 5765
 Restart=on-failure
 
 [Install]
@@ -336,8 +308,8 @@ WantedBy=multi-user.target
 ```
 
 ```bash
-sudo systemctl enable mediasage
-sudo systemctl start mediasage
+sudo systemctl enable b-side
+sudo systemctl start b-side
 ```
 
 </details>
@@ -380,7 +352,7 @@ Once Plex is set up, **everyone signs in with their own Plex account** before us
 
 ### Web UI Configuration
 
-You can also configure MediaSage through the **Settings** page in the web UI. Settings entered there are saved to `config.user.yaml` and persist across restarts. Environment variables always take priority over UI-saved settings.
+You can also configure B-Side through the **Settings** page in the web UI. Settings entered there are saved to `config.user.yaml` and persist across restarts. Environment variables always take priority over UI-saved settings.
 
 ### Advanced: config.yaml
 
@@ -402,7 +374,7 @@ defaults:
 
 ### Model Selection
 
-MediaSage uses a two-model strategy by default:
+B-Side uses a two-model strategy by default:
 
 | Role | Purpose | Models Used |
 |------|---------|-------------|
@@ -413,7 +385,7 @@ This balances quality with cost. Enable `smart_generation: true` to use the anal
 
 ### Local LLM Setup (Experimental)
 
-Run MediaSage with local models for privacy and zero API costs.
+Run B-Side with local models for privacy and zero API costs.
 
 <details>
 <summary><strong>Ollama</strong></summary>
@@ -423,7 +395,7 @@ Run MediaSage with local models for privacy and zero API costs.
    ollama pull llama3:8b
    ```
 
-2. Configure MediaSage via environment or Settings UI:
+2. Configure B-Side via environment or Settings UI:
    ```bash
    LLM_PROVIDER=ollama
    OLLAMA_URL=http://localhost:11434
@@ -456,7 +428,7 @@ For LM Studio, text-generation-webui, vLLM, or any OpenAI-compatible server:
 
 ## How It Works
 
-MediaSage uses a **filter-first architecture** designed for large libraries (50,000+ tracks):
+B-Side uses a **filter-first architecture** designed for large libraries (50,000+ tracks):
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
@@ -494,8 +466,8 @@ This ensures every track exists in your library while keeping API costs manageab
 ### Local Setup
 
 ```bash
-git clone https://github.com/ecwilsonaz/mediasage.git
-cd mediasage
+git clone https://github.com/Cd084/B-Side.git
+cd B-Side
 python -m venv venv
 source venv/bin/activate
 pip install -r requirements.txt
@@ -562,6 +534,22 @@ Interactive documentation available at `/docs` when running.
 
 ---
 
+## Privacy
+
+- B-Side talks to **plex.tv**, for sign-in, to **your Plex server**, and to **the AI provider you choose**.
+- With a **cloud AI** (Gemini, Anthropic or OpenAI), your prompts and the **title, artist, album, year and genre of candidate tracks and albums** from your library are sent to that provider. No audio, files or Plex credentials are sent, and nothing goes to B-Side's authors.
+- With **Ollama** or another local model, nothing leaves your network except Plex sign-in.
+- There are no ads, no analytics and no tracking.
+
+## Problems and ideas
+
+Please [open an issue](https://github.com/Cd084/B-Side/issues). Include:
+- how you run B-Side (Docker, NAS or bare metal);
+- which AI provider and model you use;
+- what you did, what you expected, and what happened instead.
+
+Problems that also happen in MediaSage are best reported [there](https://github.com/ecwilsonaz/mediasage/issues).
+
 ## License
 
-MIT
+MIT; see [LICENSE](LICENSE). MediaSage is copyright © 2026 Eric Wilson, and B-Side's changes are copyright © 2026 Cd084.
