@@ -43,30 +43,12 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Log in to Docker Hub
-        if: github.event_name != 'pull_request'
-        uses: docker/login-action@v4
-        continue-on-error: true
-        with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
-
-      - name: Determine image names
-        id: images
-        env:
-          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
-        run: |
-          IMAGES="ghcr.io/${{ github.repository }}"
-          if [ -n "${DOCKERHUB_USERNAME}" ]; then
-            IMAGES="${IMAGES},${DOCKERHUB_USERNAME}/mediasage"
-          fi
-          echo "list=${IMAGES}" >> $GITHUB_OUTPUT
 
       - name: Extract metadata
         id: meta
         uses: docker/metadata-action@v6
         with:
-          images: ${{ steps.images.outputs.list }}
+          images: ghcr.io/${{ github.repository }}
           tags: |
             type=ref,event=branch
             type=semver,pattern={{version}}
